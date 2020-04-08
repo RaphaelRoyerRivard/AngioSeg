@@ -17,11 +17,11 @@ import opticdisc
 import displayslider
 import pospatch
 import shutil
-
+from PIL import Image
 import FantinNetAngio_upscale_unet
 import inference
 import time
-
+import argparse
 
 from os import walk
 import math
@@ -497,6 +497,7 @@ class AVMainWindow(QtGui.QMainWindow):
             print(end - start)
 
             cvimage =  self.canvas.probaseg > self.canvas.displaydock.slider3.value()
+            print(f"Segmentation threshold: {self.canvas.displaydock.slider3.value()}")
             self.segmentation = self.convertGrayMattoQImageGreen(cvimage)
             #self.displayseg()
 
@@ -1090,6 +1091,42 @@ def main():
         app = QtGui.QApplication(sys.argv)
         ex = AVMainWindow()
         sys.exit(app.exec_())
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', default='.', help='input folder in which to search recursively for jpg frames to segment')
+    parser.add_argument('--seg_threshold', default=64, help='threshold of vessel probability for segmentation')
+    args = parser.parse_args()
+
+    input_folder = args.input
+    threshold = args.seg_threshold
+
+    # Load the segmentation model
+    script_path = os.path.realpath(__file__)
+    project_path = script_path.split("src\\SEGMENTATIONTOOL\\label_AV.py")[0]
+    segmentation_model = inference.Inference(f'{project_path}\\checkpointimage\\model_7600')
+
+    for path, subfolders, files in os.walk(input_folder):
+        print(path)
+        output_folder = f'{path}\\segmented'
+        for file in files:
+            if not file.endswith(".jpg"):
+                continue
+
+            if not os.path.exists(output_folder):
+                os.mkdir(output_folder)
+
+            # Read the image
+            image_path = f'{path}\\{file}'
+            image = np.float32(cv2.imread(image_path, cv2.IMREAD_GRAYSCALE))
+
+            # Segment the image
+            segmented_image = segmentation_model.inferfromimage(image, 1.0)
+            segmented_image = segmented_image > threshold
+
+            # Save the segmented image
+            segmented_image_name = f'{file.split(".jpg")[0]}_segmented.png'
+            im = Image.fromarray(segmented_image)
+            im.save(f'{output_folder}\\{segmented_image_name}')
 
 
 if __name__ == '__main__':

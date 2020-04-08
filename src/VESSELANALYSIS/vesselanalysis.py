@@ -14,6 +14,8 @@ import os.path
 import math
 import networkx as nx
 import random
+import argparse
+import time
 
 _DIRNAME = os.path.dirname(__file__)
 toolsdll=cdll.LoadLibrary(os.path.join(_DIRNAME,'VesselAnalysis/x64/Release/VesselAnalysis.dll'))
@@ -343,7 +345,8 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
 
     return imagegraph, imagetree, T, Tmerged
 
-def vesselanalysis(image):
+
+def vesselanalysis(image, out_name):
 
     ## 1 get skeleton
     skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
@@ -352,24 +355,50 @@ def vesselanalysis(image):
 
     toolsdll.vesselanalysis_getskeleton(c_char_p(strseg), image.shape[0], image.shape[1], c_char_p(strskel))
 
-    cvskel = np.fromstring(strskel, np.uint8)
-    cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
-    cv2.imwrite('test.png', cvskel*255)
+    # cvskel = np.fromstring(strskel, np.uint8)
+    # cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
+    # cv2.imwrite(f'{out_path}\\test.png', cvskel*255)
 
     ## 2 get rid of spur
     skeletonspur = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskelspur = skeletonspur.tostring()
     toolsdll.va_spur_pruning(c_char_p(strskel), image.shape[0], image.shape[1], 20, c_char_p(strskelspur))
     cvskelspur = np.fromstring(strskelspur, np.uint8)
-    cvskelspur = np.reshape(cvskelspur,(image.shape[0] ,image.shape[1]))
-    cv2.imwrite('testspur.png', cvskelspur*255)
+    cvskelspur = np.reshape(cvskelspur, (image.shape[0], image.shape[1]))
+
+    cv2.imwrite(out_name, cvskelspur*255)
 
     ## 3 get components
-    cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-    strcc = cc.tostring()
-    nbcomponents=0
-    toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], nbcomponents, c_char_p(strcc))
+    # cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+    # strcc = cc.tostring()
+    # nbcomponents=0
+    # toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], nbcomponents, c_char_p(strcc))
+
 
 if __name__ == '__main__':
-    image = cv2.imread(sys.argv[1], cv2.IMREAD_GRAYSCALE)
-    vesselanalysis(image)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input', default='.', help='input folder in which to search recursively for png of segmented frames to skeletonize')
+    args = parser.parse_args()
+
+    input_folder = args.input
+
+    for path, subfolders, files in os.walk(input_folder):
+        print(path)
+
+        if path.split("\\")[-1] != "segmented":
+            continue
+
+        output_folder = f'{path}\\skeletonized'
+        for file in files:
+            if not file.endswith(".png"):
+                continue
+
+            if not os.path.exists(output_folder):
+                os.mkdir(output_folder)
+
+            image_path = f'{path}\\{file}'
+            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+
+            file_name = file.split("segmented")[0]
+            output = f'{output_folder}\\{file_name}skeletonized.png'
+            vesselanalysis(image, output)
