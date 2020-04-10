@@ -282,59 +282,59 @@ int va_morpho_hitmiss(const unsigned char *src, int nrow, int ncol, unsigned cha
 #define Y (STACK[SP-2])
 
 void vtatlas_morpho_cc_label_component(unsigned short* STACK, unsigned int ncol, unsigned int nrow, 
-const unsigned char* input, int* output, int labelNo, unsigned short x, unsigned short y)
+const unsigned char* input, unsigned char* output, int labelNo, unsigned short x, unsigned short y)
 {
-  int SP   = 3;
-  int index;
+	int SP = 3;
+	int index;
 
-  STACK[0] = x;
-  STACK[1] = y;
-  STACK[2] = 0;  /* return - component is labelled */
+	STACK[0] = x;
+	STACK[1] = y;
+	STACK[2] = 0;  /* return - component is labelled */
 
-START: /* Recursive routine starts here */
+	START: /* Recursive routine starts here */
 
-  index = X + ncol*Y;
-  if (input [index] == 0) RETURN;   /* This pixel is not part of a component */
-  if (output[index] != 0) RETURN;   /* This pixel has already been labelled  */
-  output[index] = labelNo;
+		index = X + ncol*Y;
+		if (input [index] == 0) RETURN;   /* This pixel is not part of a component */
+		if (output[index] != 0) RETURN;   /* This pixel has already been labelled  */
+		output[index] = labelNo;
 
-  if (X > 0) CALL_morpho_cc_label_component(X-1, Y, 1);   /* left  pixel */
-RETURN1:
+		if (X > 0) CALL_morpho_cc_label_component(X-1, Y, 1);   /* left  pixel */
+	RETURN1:
 
-  if (X < ncol-1) CALL_morpho_cc_label_component(X+1, Y, 2);   /* right pixel */
-RETURN2:
+		if (X < ncol-1) CALL_morpho_cc_label_component(X+1, Y, 2);   /* right pixel */
+	RETURN2:
 
-  if (Y > 0) CALL_morpho_cc_label_component(X, Y-1, 3);   /* upper pixel */
-RETURN3:
+		if (Y > 0) CALL_morpho_cc_label_component(X, Y-1, 3);   /* upper pixel */
+	RETURN3:
 
-  if (Y < nrow-1) CALL_morpho_cc_label_component(X, Y+1, 4);   /* lower pixel */
-RETURN4:
+		if (Y < nrow-1) CALL_morpho_cc_label_component(X, Y+1, 4);   /* lower pixel */
+	RETURN4:
 
-  RETURN;
+		RETURN;
 }
 
-int va_morpho_cc_connected_component(const unsigned char *src, int nrow, int ncol, int *dst, int *plabelNo)
+int va_morpho_cc_connected_component(const unsigned char *src, int nrow, int ncol, unsigned char *dst, unsigned char *plabelNo)
 {
-  unsigned short* buffer = (unsigned short*) malloc(3*sizeof(unsigned short)*(nrow*ncol + 1));
-  unsigned short x,y;
-  int labelNo = 0;
-  int index   = -1;
-  for (y = 0; y < nrow; y++)
-  {
-    for (x = 0; x < ncol; x++)
-    {
-      index++;
-      if (src [index] == 0) continue;   /* This pixel is not part of a component */
-      if (dst[index] != 0) continue;   /* This pixel has already been labelled  */
-      /* New component found */
-      labelNo++;
-      vtatlas_morpho_cc_label_component(buffer, ncol, nrow, src, dst, labelNo, x, y);
-    }
-  }
+	unsigned short* buffer = (unsigned short*) malloc(3*sizeof(unsigned short)*(nrow*ncol + 1));
+	unsigned short x,y;
+	int labelNo = 0;
+	int index   = -1;
+	for (y = 0; y < nrow; y++)
+	{
+		for (x = 0; x < ncol; x++)
+		{
+			index++;
+			if (src[index] == 0) continue;   /* This pixel is not part of a component */
+			if (dst[index] != 0) continue;   /* This pixel has already been labelled */
+			/* New component found */
+			labelNo++;
+			vtatlas_morpho_cc_label_component(buffer, ncol, nrow, src, dst, labelNo, x, y);
+		}
+	}
 
-  *plabelNo=labelNo;
-  free(buffer);
-  return 0;
+	plabelNo[0] = labelNo;
+	free(buffer);
+	return 0;
 }
 
 
@@ -621,7 +621,7 @@ int va_segment_delete_bifurcation(unsigned char *seg, int nrow, int ncol)
 	return 0;
 }
 
-int vesselanalysis_getcomponents(unsigned char *skel,  int nrow, int ncol, int *nbcomponents, int *vessels_component)
+int vesselanalysis_getcomponents(unsigned char *skel,  int nrow, int ncol, unsigned char *nbcomponents, unsigned char *vessels_component)
 {
 	unsigned char *vessels_seg4c = (unsigned char*) malloc(nrow*ncol);
 
@@ -632,9 +632,9 @@ int vesselanalysis_getcomponents(unsigned char *skel,  int nrow, int ncol, int *
 
 	va_segment_delete_bifurcation(vessels_seg4c, nrow, ncol);
 
-	free(vessels_seg4c);
 	va_morpho_cc_connected_component(vessels_seg4c, nrow, ncol, vessels_component, nbcomponents);
 
+	free(vessels_seg4c);
 
 	return 0;
 }
