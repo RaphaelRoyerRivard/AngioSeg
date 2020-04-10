@@ -282,7 +282,7 @@ int va_morpho_hitmiss(const unsigned char *src, int nrow, int ncol, unsigned cha
 #define Y (STACK[SP-2])
 
 void vtatlas_morpho_cc_label_component(unsigned short* STACK, unsigned int ncol, unsigned int nrow, 
-const unsigned char* input, unsigned char* output, int labelNo, unsigned short x, unsigned short y)
+const unsigned char* input, unsigned char* output, unsigned short labelNo, unsigned short x, unsigned short y)
 {
 	int SP = 3;
 	int index;
@@ -317,7 +317,7 @@ int va_morpho_cc_connected_component(const unsigned char *src, int nrow, int nco
 {
 	unsigned short* buffer = (unsigned short*) malloc(3*sizeof(unsigned short)*(nrow*ncol + 1));
 	unsigned short x,y;
-	int labelNo = 0;
+	unsigned short labelNo = 0;
 	int index   = -1;
 	for (y = 0; y < nrow; y++)
 	{

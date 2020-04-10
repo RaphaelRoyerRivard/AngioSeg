@@ -348,7 +348,7 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
 
 def vesselanalysis(image, out_name):
 
-    ## 1 get skeleton
+    # 1 get skeleton
     skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskel = skeleton.tostring()
     strseg = image.tostring()
@@ -359,38 +359,70 @@ def vesselanalysis(image, out_name):
     # cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
     # cv2.imwrite(f'{out_path}\\test.png', cvskel*255)
 
-    ## 2 get rid of spur
+    # 2 get rid of spur
     skeletonspur = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskelspur = skeletonspur.tostring()
     toolsdll.va_spur_pruning(c_char_p(strskel), image.shape[0], image.shape[1], 20, c_char_p(strskelspur))
     cvskelspur = np.fromstring(strskelspur, np.uint8)
     cvskelspur = np.reshape(cvskelspur, (image.shape[0], image.shape[1]))
 
-    cv2.imwrite(out_name, cvskelspur*255)
+    cv2.imwrite(out_name + ".png", cvskelspur*255)
 
-    ## 3 get components
+    # 3 get components (separate branches)
     # cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     # strcc = cc.tostring()
-    # nbcomponents=0
-    # toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], nbcomponents, c_char_p(strcc))
+    # nbcomponents = np.zeros((1), dtype=np.uint8)
+    # strnbcomponents = nbcomponents.tostring()
+    # toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], strnbcomponents, c_char_p(strcc))
+    # nbcomponents = np.fromstring(strnbcomponents, np.uint8)[0]
+    # print("nbcomponents:", nbcomponents)
+    # components = np.fromstring(strcc, np.uint8)
+    # components = np.reshape(components, (image.shape[0], image.shape[1]))
+    # # nonzero_component_indices = components.nonzero()[0]
+    # # nonzero_components = components[nonzero_component_indices]
+    # # nonzero_component_values = {}
+    # # for nonzero_component in nonzero_components:
+    # #     if nonzero_component not in nonzero_component_values:
+    # #         nonzero_component_values[nonzero_component] = 1
+    # #     else:
+    # #         nonzero_component_values[nonzero_component] += 1
+    # # print(nonzero_component_values)
+    # cv2.imwrite(out_name + "_components.png", components)
+
+
+def overlap(image, skeleton, out_name):
+    # Overlapping skeleton and original image
+    rgb_image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
+    skeleton_indices = skeleton.nonzero()
+    rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 0
+    rgb_image[skeleton_indices[0], skeleton_indices[1], 1] = 255
+    cv2.imwrite(out_name, rgb_image)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', default='.', help='input folder in which to search recursively for png of segmented frames to skeletonize')
+    parser.add_argument('--visualize', type=bool, default=False, help='mode where it saves overlapped images of the skeleton over the original image')
     args = parser.parse_args()
 
     input_folder = args.input
+    visualize = args.visualize
 
     for path, subfolders, files in os.walk(input_folder):
         print(path)
 
-        if path.split("\\")[-1] != "segmented":
-            continue
+        if visualize:
+            if "segmented" not in subfolders:
+                continue
+            output_folder = f'{path}\\segmented\\skeletonized\\overlapped'
+        else:
+            if path.split("\\")[-1] != "segmented":
+                continue
+            output_folder = f'{path}\\skeletonized'
 
-        output_folder = f'{path}\\skeletonized'
         for file in files:
-            if not file.endswith(".png"):
+            image_type = ".jpg" if visualize else ".png"
+            if not file.endswith(image_type):
                 continue
 
             if not os.path.exists(output_folder):
@@ -399,6 +431,12 @@ if __name__ == '__main__':
             image_path = f'{path}\\{file}'
             image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-            file_name = file.split("segmented")[0]
-            output = f'{output_folder}\\{file_name}skeletonized.png'
-            vesselanalysis(image, output)
+            if visualize:
+                file_name = file.split(".jpg")[0]
+                skeleton = cv2.imread(f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized.png', cv2.IMREAD_GRAYSCALE)
+                output = f'{output_folder}\\{file_name}_overlap.png'
+                overlap(image, skeleton, output)
+            else:
+                file_name = file.split("segmented")[0]
+                output = f'{output_folder}\\{file_name}skeletonized'
+                vesselanalysis(image, output)
