@@ -347,55 +347,63 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
 
 
 def vesselanalysis(image, out_name):
+    print(out_name)
 
     # 1 get skeleton
+    start = time.time()
     skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskel = skeleton.tostring()
     strseg = image.tostring()
 
     toolsdll.vesselanalysis_getskeleton(c_char_p(strseg), image.shape[0], image.shape[1], c_char_p(strskel))
+    print(f"1. skeleton took {time.time() - start}s")
 
     # cvskel = np.fromstring(strskel, np.uint8)
     # cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
     # cv2.imwrite(f'{out_path}\\test.png', cvskel*255)
 
     # 2 get rid of spur
+    start = time.time()
     skeletonspur = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskelspur = skeletonspur.tostring()
     toolsdll.va_spur_pruning(c_char_p(strskel), image.shape[0], image.shape[1], 20, c_char_p(strskelspur))
     cvskelspur = np.fromstring(strskelspur, np.uint8)
     cvskelspur = np.reshape(cvskelspur, (image.shape[0], image.shape[1]))
+    print(f"2. spur took {time.time() - start}s")
 
     cv2.imwrite(out_name + ".png", cvskelspur*255)
 
     # 3 get components (separate branches)
-    # cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-    # strcc = cc.tostring()
-    # nbcomponents = np.zeros((1), dtype=np.uint8)
-    # strnbcomponents = nbcomponents.tostring()
-    # toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], strnbcomponents, c_char_p(strcc))
-    # nbcomponents = np.fromstring(strnbcomponents, np.uint8)[0]
-    # print("nbcomponents:", nbcomponents)
-    # components = np.fromstring(strcc, np.uint8)
-    # components = np.reshape(components, (image.shape[0], image.shape[1]))
-    # # nonzero_component_indices = components.nonzero()[0]
-    # # nonzero_components = components[nonzero_component_indices]
-    # # nonzero_component_values = {}
-    # # for nonzero_component in nonzero_components:
-    # #     if nonzero_component not in nonzero_component_values:
-    # #         nonzero_component_values[nonzero_component] = 1
-    # #     else:
-    # #         nonzero_component_values[nonzero_component] += 1
-    # # print(nonzero_component_values)
-    # cv2.imwrite(out_name + "_components.png", components)
+    start = time.time()
+    cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+    strcc = cc.tostring()
+    nbcomponents = np.zeros(1, dtype=np.uint8)
+    strnbcomponents = nbcomponents.tostring()
+    toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], strnbcomponents, c_char_p(strcc))
+    nbcomponents = np.fromstring(strnbcomponents, np.uint8)[0]
+    components = np.fromstring(strcc, np.uint8)
+    print(f"3. components took {time.time() - start}s")
+    start = time.time()
+    component_colors = np.random.rand(nbcomponents, 3) * 255
+    components = np.repeat(components[:, np.newaxis], 3, axis=1)
+    for i in range(components.shape[0]):
+        if components[i, 0] > 0:
+            components[i, :] = component_colors[components[i, 0] - 1]
+    components = np.reshape(components, (image.shape[0], image.shape[1], 3))
+    print(f"4. colors took {time.time() - start}s")
+
+    cv2.imwrite(out_name + "_components.png", components)
 
 
 def overlap(image, skeleton, out_name):
     # Overlapping skeleton and original image
     rgb_image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
     skeleton_indices = skeleton.nonzero()
-    rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 0
-    rgb_image[skeleton_indices[0], skeleton_indices[1], 1] = 255
+    if len(skeleton.shape) == 1:
+        rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 0
+        rgb_image[skeleton_indices[0], skeleton_indices[1], 1] = 255
+    else:
+        rgb_image[skeleton_indices[0], skeleton_indices[1], :] = skeleton[skeleton_indices[0], skeleton_indices[1], :]
     cv2.imwrite(out_name, rgb_image)
 
 
@@ -433,7 +441,11 @@ if __name__ == '__main__':
 
             if visualize:
                 file_name = file.split(".jpg")[0]
-                skeleton = cv2.imread(f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized.png', cv2.IMREAD_GRAYSCALE)
+                skeleton_file_name = f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized'
+                if os.path.exists(f'{skeleton_file_name}_components.png'):
+                    skeleton = cv2.imread(f'{skeleton_file_name}_components.png', cv2.IMREAD_COLOR)
+                else:
+                    skeleton = cv2.imread(f'{skeleton_file_name}.png', cv2.IMREAD_GRAYSCALE)
                 output = f'{output_folder}\\{file_name}_overlap.png'
                 overlap(image, skeleton, output)
             else:
