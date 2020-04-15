@@ -16,6 +16,7 @@ import networkx as nx
 import random
 import argparse
 import time
+from skimage.morphology import skeletonize
 
 _DIRNAME = os.path.dirname(__file__)
 toolsdll=cdll.LoadLibrary(os.path.join(_DIRNAME,'VesselAnalysis/x64/Release/VesselAnalysis.dll'))
@@ -346,23 +347,27 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
     return imagegraph, imagetree, T, Tmerged
 
 
-def vesselanalysis(image, out_name):
+def vesselanalysis(image, out_name, use_scikit=True):
     print(out_name)
 
     # 1 get skeleton
     start = time.time()
-    skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-    strskel = skeleton.tostring()
-    strseg = image.tostring()
-
-    toolsdll.vesselanalysis_getskeleton(c_char_p(strseg), image.shape[0], image.shape[1], c_char_p(strskel))
+    if use_scikit:
+        skeleton = (skeletonize(image, method='lee') / 255).astype(np.uint8)
+        strskel = skeleton.tostring()
+    else:
+        # 1 get skeleton
+        start = time.time()
+        skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+        strskel = skeleton.tostring()
+        strseg = image.tostring()
+        toolsdll.vesselanalysis_getskeleton(c_char_p(strseg), image.shape[0], image.shape[1], c_char_p(strskel))
+        # cvskel = np.fromstring(strskel, np.uint8)
+        # cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
+        # cv2.imwrite(f'{out_path}\\test.png', cvskel*255)
     print(f"1. skeleton took {time.time() - start}s")
 
-    # cvskel = np.fromstring(strskel, np.uint8)
-    # cvskel = np.reshape(cvskel,(image.shape[0] ,image.shape[1]))
-    # cv2.imwrite(f'{out_path}\\test.png', cvskel*255)
-
-    # 2 get rid of spur
+    # 2b get rid of spur
     start = time.time()
     skeletonspur = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
     strskelspur = skeletonspur.tostring()
@@ -370,7 +375,6 @@ def vesselanalysis(image, out_name):
     cvskelspur = np.fromstring(strskelspur, np.uint8)
     cvskelspur = np.reshape(cvskelspur, (image.shape[0], image.shape[1]))
     print(f"2. spur took {time.time() - start}s")
-
     cv2.imwrite(out_name + ".png", cvskelspur*255)
 
     # 3 get components (separate branches)
