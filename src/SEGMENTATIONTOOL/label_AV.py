@@ -1094,11 +1094,13 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', default='.', help='input folder in which to search recursively for jpg frames to segment')
-    parser.add_argument('--seg_threshold', default=64, help='threshold of vessel probability for segmentation')
+    parser.add_argument('--seg_threshold', type=int, default=64, help='threshold of vessel probability for segmentation')
     args = parser.parse_args()
 
     input_folder = args.input
     threshold = args.seg_threshold
+
+    print(f"Parsing jpg images in {input} with segmentation threshold of {threshold}")
 
     # Load the segmentation model
     script_path = os.path.realpath(__file__)
@@ -1107,13 +1109,17 @@ def main():
 
     for path, subfolders, files in os.walk(input_folder):
         print(path)
-        output_folder = f'{path}\\segmented'
+        segmentation_output_folder = f'{path}\\segmented'
+        overlap_output_folder = f'{path}\\segmented\\overlap'
         for file in files:
             if not file.endswith(".jpg"):
                 continue
 
-            if not os.path.exists(output_folder):
-                os.mkdir(output_folder)
+            if not os.path.exists(segmentation_output_folder):
+                os.mkdir(segmentation_output_folder)
+
+            if not os.path.exists(overlap_output_folder):
+                os.mkdir(overlap_output_folder)
 
             # Read the image
             image_path = f'{path}\\{file}'
@@ -1126,7 +1132,18 @@ def main():
             # Save the segmented image
             segmented_image_name = f'{file.split(".jpg")[0]}_segmented.png'
             im = Image.fromarray(segmented_image)
-            im.save(f'{output_folder}\\{segmented_image_name}')
+            im.save(f'{segmentation_output_folder}\\{segmented_image_name}')
+
+            # Overlap the original image and the segmentation
+            image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
+            image[:, :, 2] = np.maximum(segmented_image * 255, image[:, :, 2])
+
+            # Save the overlapped image
+            overlapped_image_name = f'{file.split(".jpg")[0]}_overlap.png'
+            cv2.imwrite(f'{overlap_output_folder}\\{overlapped_image_name}', image)
+            # print(image.shape)
+            # im = Image.fromarray(image)
+            # im.save(f'{overlap_output_folder}\\{overlapped_image_name}')
 
 
 if __name__ == '__main__':

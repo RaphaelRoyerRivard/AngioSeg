@@ -1,6 +1,7 @@
 import numpy as np
 from scipy import ndimage
 from scipy import misc
+from scipy.signal import convolve2d
 import matplotlib.pyplot as plt
 import os
 import os.path
@@ -347,6 +348,13 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
     return imagegraph, imagetree, T, Tmerged
 
 
+def fill_missing_pixels(image):
+    filter = np.array([[1, 1, 1],
+                       [1, 1, 1],
+                       [1, 1, 1]])
+    res = convolve2d(image, filter, mode="same")
+    image[np.where(res >= res.max() * 0.2)] = 255
+
 def vesselanalysis(image, out_name, use_scikit=True):
     print(out_name)
 
@@ -378,32 +386,67 @@ def vesselanalysis(image, out_name, use_scikit=True):
     cv2.imwrite(out_name + ".png", cvskelspur*255)
 
     # 3 get components (separate branches)
-    start = time.time()
-    cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
-    strcc = cc.tostring()
-    nbcomponents = np.zeros(1, dtype=np.uint8)
-    strnbcomponents = nbcomponents.tostring()
-    toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], strnbcomponents, c_char_p(strcc))
-    nbcomponents = np.fromstring(strnbcomponents, np.uint8)[0]
-    components = np.fromstring(strcc, np.uint8)
-    print(f"3. components took {time.time() - start}s")
-    start = time.time()
-    component_colors = np.random.rand(nbcomponents, 3) * 255
-    components = np.repeat(components[:, np.newaxis], 3, axis=1)
-    for i in range(components.shape[0]):
-        if components[i, 0] > 0:
-            components[i, :] = component_colors[components[i, 0] - 1]
-    components = np.reshape(components, (image.shape[0], image.shape[1], 3))
-    print(f"4. colors took {time.time() - start}s")
+    # start = time.time()
+    # cc = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+    # strcc = cc.tostring()
+    # nbcomponents = np.zeros(1, dtype=np.uint8)
+    # strnbcomponents = nbcomponents.tostring()
+    # toolsdll.vesselanalysis_getcomponents(c_char_p(strskelspur), image.shape[0], image.shape[1], strnbcomponents, c_char_p(strcc))
+    # nbcomponents = np.fromstring(strnbcomponents, np.uint8)[0]
+    # components = np.fromstring(strcc, np.uint8)
+    # print(f"3. components took {time.time() - start}s")
+    # start = time.time()
+    # component_colors = np.random.rand(nbcomponents, 3) * 255
+    # components = np.repeat(components[:, np.newaxis], 3, axis=1)
+    # for i in range(components.shape[0]):
+    #     if components[i, 0] > 0:
+    #         components[i, :] = component_colors[components[i, 0] - 1]
+    # components = np.reshape(components, (image.shape[0], image.shape[1], 3))
+    # print(f"4. colors took {time.time() - start}s")
+    # cv2.imwrite(out_name + "_components.png", components)
 
-    cv2.imwrite(out_name + "_components.png", components)
+    # 3 get components (separate branches)
+    start = time.time()
+    bifurcation_pixels_x = []
+    bifurcation_pixels_y = []
+    skel_x, skel_y = np.where(cvskelspur > 0)
+    for pixel in range(len(skel_x)):
+        x = skel_x[pixel]
+        y = skel_y[pixel]
+        patch = cvskelspur[x-1:x+2, y-1:y+2]
+        # The 3x3 patch needs at least 4 pixels to be a bifurcation, otherwise it's a single branch
+        if patch.sum() < 4:
+            continue
+        # We need to check the pixels around the center pixel to count the branches
+        # Pixels that are next to each other count as the same branch
+        branch_count = 0
+        previous_pixel = patch[0, 0] > 0
+        for patch_x, patch_y in [(0, 1), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (1, 0), (0, 0)]:
+            if patch[patch_x, patch_y] > 0:
+                if not previous_pixel:
+                    branch_count += 1
+                previous_pixel = True
+            else:
+                previous_pixel = False
+        if branch_count > 2:
+            bifurcation_pixels_x.append(x)
+            bifurcation_pixels_y.append(y)
+    print(len(bifurcation_pixels_x))
+    bifurcations_layer = np.zeros(cvskelspur.shape, dtype=np.uint8)
+    bifurcations_layer[np.array(bifurcation_pixels_x, dtype=np.int), np.array(bifurcation_pixels_y, dtype=np.int)] = 1
+    bifurcations = np.repeat(cvskelspur[:, :, np.newaxis], 3, axis=2)
+    bifurcations[:, :, 1] -= bifurcations_layer
+    print(f"3. bifurcations took {time.time() - start}s")
+    cv2.imwrite(out_name + "_bifurcations.png", bifurcations*255)
+
+    return cvskelspur*255, bifurcations
 
 
 def overlap(image, skeleton, out_name):
     # Overlapping skeleton and original image
     rgb_image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
     skeleton_indices = skeleton.nonzero()
-    if len(skeleton.shape) == 1:
+    if len(skeleton.shape) == 2:
         rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 0
         rgb_image[skeleton_indices[0], skeleton_indices[1], 1] = 255
     else:
@@ -413,46 +456,71 @@ def overlap(image, skeleton, out_name):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input', default='.', help='input folder in which to search recursively for png of segmented frames to skeletonize')
-    parser.add_argument('--visualize', type=bool, default=False, help='mode where it saves overlapped images of the skeleton over the original image')
+    parser.add_argument('--input', default='.', help='input file or folder in which to search recursively for images of segmented frames to skeletonize')
+    parser.add_argument('--file_type', default='png', help='type of images to skeletonize (png, jpg, tif, etc)')
+    parser.add_argument('--contains', default='', help='filters out files that do not contain that string (i.e. "_seg")')
+    parser.add_argument('--visualize', default=False, help='mode where it saves overlapped images of the skeleton over the original image')
     args = parser.parse_args()
 
-    input_folder = args.input
+    input_path = args.input
+    file_type = args.file_type
+    contains = args.contains
     visualize = args.visualize
 
-    for path, subfolders, files in os.walk(input_folder):
-        print(path)
-
-        if visualize:
-            if "segmented" not in subfolders:
-                continue
-            output_folder = f'{path}\\segmented\\skeletonized\\overlapped'
-        else:
-            if path.split("\\")[-1] != "segmented":
-                continue
-            output_folder = f'{path}\\skeletonized'
-
-        for file in files:
-            image_type = ".jpg" if visualize else ".png"
-            if not file.endswith(image_type):
-                continue
-
-            if not os.path.exists(output_folder):
-                os.mkdir(output_folder)
-
-            image_path = f'{path}\\{file}'
-            image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    if os.path.isfile(input_path):
+        file_type = input_path.split('.')[-1]
+        image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
+        file_name = input_path.split(f".{file_type}")[0]
+        fill_missing_pixels(image)
+        vesselanalysis(image, f"{file_name}_skeleton")
+    else:
+        for path, subfolders, files in os.walk(input_path):
+            print(path)
 
             if visualize:
-                file_name = file.split(".jpg")[0]
-                skeleton_file_name = f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized'
-                if os.path.exists(f'{skeleton_file_name}_components.png'):
-                    skeleton = cv2.imread(f'{skeleton_file_name}_components.png', cv2.IMREAD_COLOR)
-                else:
-                    skeleton = cv2.imread(f'{skeleton_file_name}.png', cv2.IMREAD_GRAYSCALE)
-                output = f'{output_folder}\\{file_name}_overlap.png'
-                overlap(image, skeleton, output)
+                # if "segmented" not in subfolders:
+                #     continue
+                # output_folder = f'{path}\\segmented\\overlapped'
+                output_folder = f'{path}'
             else:
-                file_name = file.split("segmented")[0]
-                output = f'{output_folder}\\{file_name}skeletonized'
-                vesselanalysis(image, output)
+                # if path.split("\\")[-1] != "segmented":
+                #     continue
+                # output_folder = f'{path}\\skeletonized'
+                output_folder = f'{path}'
+
+            for file in files:
+                image_type = f".{file_type}"
+                if not file.endswith(image_type):
+                    continue
+
+                if contains != "" and contains not in file:
+                    continue
+
+                if not os.path.exists(output_folder):
+                    os.mkdir(output_folder)
+
+                image_path = f'{path}\\{file}'
+                image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                fill_missing_pixels(image)
+
+                if visualize:
+                    # file_name = file.split(".jpg")[0]
+                    # skeleton_file_name = f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized'
+                    # if os.path.exists(f'{skeleton_file_name}_components.png'):
+                    #     skeleton = cv2.imread(f'{skeleton_file_name}_components.png', cv2.IMREAD_COLOR)
+                    # else:
+                    #     skeleton = cv2.imread(f'{skeleton_file_name}.png', cv2.IMREAD_GRAYSCALE)
+                    file_name = file.split("seg")[0]
+                    output = f'{output_folder}\\{file_name}skeletonized'
+                    skeleton, components = vesselanalysis(image, output)
+                    output = f'{output_folder}\\{file_name}overlap.png'
+                    image_path = f'{path}\\{file_name[:-1]}{image_type}'
+                    print(image_path)
+                    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                    overlap(image, skeleton, output)
+                else:
+                    # file_name = file.split("segmented")[0]
+                    file_name = file.split("seg")[0]
+                    output = f'{output_folder}\\{file_name}skeletonized'
+                    cv2.imwrite(f'{output_folder}\\{file_name}seg_filled.png', image)
+                    vesselanalysis(image, output)

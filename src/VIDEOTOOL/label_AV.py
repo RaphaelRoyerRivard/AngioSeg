@@ -472,7 +472,8 @@ class AVMainWindow(QtGui.QMainWindow):
 
             if not self.inittf==True:
                 self.inittf=True
-                self.inferenceobj = inference.Inference('C:/Recherche/Work_CORSTEM/20171004-20171004T134441Z-001/20171004/checkpoints/checkpointimage/model_7600')
+                # self.inferenceobj = inference.Inference('C:/Recherche/Work_CORSTEM/20171004-20171004T134441Z-001/20171004/checkpoints/checkpointimage/model_7600')
+                self.inferenceobj = inference.Inference('../../checkpointimage/model_7600', 1, 128)
 
             start = time.time()
 
