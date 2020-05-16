@@ -17,7 +17,8 @@ import networkx as nx
 import random
 import argparse
 import time
-from skimage.morphology import skeletonize
+from skimage.morphology import skeletonize, medial_axis
+from scipy.ndimage import gaussian_filter1d
 
 _DIRNAME = os.path.dirname(__file__)
 toolsdll=cdll.LoadLibrary(os.path.join(_DIRNAME,'VesselAnalysis/x64/Release/VesselAnalysis.dll'))
@@ -355,16 +356,141 @@ def fill_missing_pixels(image):
     res = convolve2d(image, filter, mode="same")
     image[np.where(res >= res.max() * 0.2)] = 255
 
+
+def find_ostia(skeleton_distances, bifurcations):
+    print(skeleton_distances.max())
+    ten_percent = int(skeleton_distances.shape[1] * 0.1)
+    potential_catheters = np.where(skeleton_distances[ten_percent, :] > 0)
+    print(potential_catheters)
+    # plt.imshow(skeleton_distances)
+    # plt.show()
+    for pixel_x in potential_catheters[0]:
+        if skeleton_distances[ten_percent+1, pixel_x] > 0:  # Bottom
+            starting_point = (pixel_x, ten_percent+1)
+        elif skeleton_distances[ten_percent+1, pixel_x-1] > 0:  # Bottom left
+            starting_point = (pixel_x-1, ten_percent+1)
+        elif skeleton_distances[ten_percent+1, pixel_x+1] > 0:  # Bottom right
+            starting_point = (pixel_x+1, ten_percent+1)
+        else:  # No valid points to do the pathing
+            print(f"No valid points to do the pathing for ({pixel_x}, {ten_percent})")
+            continue
+        nodes, vessel_width = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, ten_percent))
+        widening_location = get_location_of_widening(nodes, vessel_width)
+        if widening_location is not None:
+            return widening_location
+
+    return None
+
+
+class PathNode:
+
+    def __init__(self, x, y, parent=None):
+        self.x = x
+        self.y = y
+        self.parent = parent
+
+
+def follow_path(skeleton_distances, bifurcations, starting_point, parent=None):
+    """
+    Follows a path on the skeleton until it reaches a big change in width or a bifurcation.
+    :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
+    :param bifurcations: A 2D ndarray containing the points of bifurcations on the skeleton.
+    :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
+    :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
+    It basically allows the algorithm to know in what direction to start pathing.
+    :return: Returns a list of nodes representing the path taken and the vessel width along the path.
+    """
+
+    parent_node = None if parent is None else PathNode(parent[0], parent[1])
+    current_node = PathNode(starting_point[0], starting_point[1], parent_node)
+    while True:
+        patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
+        potential_points = []
+        for y in range(patch.shape[0]):
+            for x in range(patch.shape[1]):
+                if patch[y, x] > 0:  # if pixel is lit up
+                    if x == 1 and y == 1:
+                        continue  # skip current point
+                    if current_node.parent is not None:
+                        if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
+                            continue  # skip parent point
+                        if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
+                            continue  # skip parent's parent point
+                    potential_points.append((x, y))
+
+        if len(potential_points) == 0:
+            break  # finished on a dead end
+
+        next_point = potential_points[0]
+        if len(potential_points) > 1:  # there was 2 new pixels next to the current point
+            # we find the closest one (the one that is not in diagonal)
+            for potential_point in potential_points:
+                if abs(potential_point[0]) + abs(potential_point[1]) == 1:
+                    next_point = potential_point
+                    break
+        current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
+        if bifurcations[current_node.y, current_node.x] > 0:
+            break  # finished on a bifurcation
+
+    nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
+    return nodes, vessel_width
+
+
+def get_nodes_and_vessel_width(end_node, skeleton_distances):
+    current_node = end_node
+    nodes = [current_node]
+    distances = []
+    while current_node is not None:
+        distances.append(skeleton_distances[current_node.y, current_node.x])
+        current_node = current_node.parent
+        nodes.append(current_node)
+    nodes.pop()
+    nodes = list(reversed(nodes))
+
+    vessel_width = np.array(list(reversed(distances)))
+    vessel_width = gaussian_filter1d(vessel_width, 6)
+
+    return nodes, vessel_width
+
+
+def get_location_of_widening(nodes, vessel_width):
+    plt.title("Vessel width for pixels of skeleton segment")
+    plt.plot(vessel_width)
+    plt.xlabel("Segment pixel #")
+    plt.ylabel("Vessel width in pixels")
+    plt.show()
+
+    for i in range(10, len(vessel_width)):
+        if vessel_width[i-10] > 0:
+            ratio = vessel_width[i] / vessel_width[i-10]
+            if ratio >= 1.5:
+                return nodes[i].x, nodes[i].y
+
+    return None
+
+
 def vesselanalysis(image, out_name, use_scikit=True):
     print(out_name)
 
     # 1 get skeleton
     start = time.time()
     if use_scikit:
-        skeleton = (skeletonize(image, method='lee') / 255).astype(np.uint8)
+        skeleton, distance = medial_axis(image, return_distance=True)
+        # skeleton = (skeletonize(image, method='lee') / 255).astype(np.uint8)
+        # skeleton2, distance = medial_axis(image, return_distance=True)
+        # skeletons = np.array([skeleton, skeleton2, np.zeros_like(image)])
+        # skeletons = np.moveaxis(skeletons, 0, 2)
+        # print(skeletons.min(), skeletons.max(), skeletons.mean())
+        # plt.imshow(skeleton, vmin=0, vmax=1)
+        # plt.show()
+        # plt.imshow(skeleton2, vmin=0, vmax=1)
+        # plt.show()
+        # plt.imshow(skeletons*255)
+        # plt.show()
         strskel = skeleton.tostring()
     else:
         # 1 get skeleton
+        distance = np.ones_like(image)
         start = time.time()
         skeleton = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
         strskel = skeleton.tostring()
@@ -439,7 +565,8 @@ def vesselanalysis(image, out_name, use_scikit=True):
     print(f"3. bifurcations took {time.time() - start}s")
     cv2.imwrite(out_name + "_bifurcations.png", bifurcations*255)
 
-    return cvskelspur*255, bifurcations
+    skeleton_distance = cvskelspur * distance
+    return skeleton_distance, bifurcations_layer
 
 
 def overlap(image, skeleton, out_name):
@@ -468,12 +595,22 @@ if __name__ == '__main__':
     visualize = args.visualize
 
     if os.path.isfile(input_path):
+        print("Input is a file")
         file_type = input_path.split('.')[-1]
         image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
         file_name = input_path.split(f".{file_type}")[0]
         fill_missing_pixels(image)
-        vesselanalysis(image, f"{file_name}_skeleton")
+        skeleton, bifurcations = vesselanalysis(image, f"{file_name}_skeleton")
+        ostia = find_ostia(skeleton, bifurcations)
+        if ostia is not None:
+            skeleton[skeleton > 0] = 1
+            visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
+            visualization[:, :, 1] -= bifurcations
+            visualization[ostia[1], ostia[0], 2] -= 1
+            plt.imshow(visualization)
+            plt.show()
     else:
+        print("Input is a folder")
         for path, subfolders, files in os.walk(input_path):
             print(path)
 
