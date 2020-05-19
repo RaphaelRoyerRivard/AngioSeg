@@ -19,6 +19,7 @@ import argparse
 import time
 from skimage.morphology import skeletonize, medial_axis
 from scipy.ndimage import gaussian_filter1d
+from sklearn.linear_model import LinearRegression
 
 _DIRNAME = os.path.dirname(__file__)
 toolsdll=cdll.LoadLibrary(os.path.join(_DIRNAME,'VesselAnalysis/x64/Release/VesselAnalysis.dll'))
@@ -358,23 +359,22 @@ def fill_missing_pixels(image):
 
 
 def find_ostia(skeleton_distances, bifurcations):
-    print(skeleton_distances.max())
-    ten_percent = int(skeleton_distances.shape[1] * 0.1)
-    potential_catheters = np.where(skeleton_distances[ten_percent, :] > 0)
+    five_percent = int(skeleton_distances.shape[1] * 0.05)
+    potential_catheters = np.where(skeleton_distances[five_percent, :] > 0)
     print(potential_catheters)
     # plt.imshow(skeleton_distances)
     # plt.show()
     for pixel_x in potential_catheters[0]:
-        if skeleton_distances[ten_percent+1, pixel_x] > 0:  # Bottom
-            starting_point = (pixel_x, ten_percent+1)
-        elif skeleton_distances[ten_percent+1, pixel_x-1] > 0:  # Bottom left
-            starting_point = (pixel_x-1, ten_percent+1)
-        elif skeleton_distances[ten_percent+1, pixel_x+1] > 0:  # Bottom right
-            starting_point = (pixel_x+1, ten_percent+1)
+        if skeleton_distances[five_percent+1, pixel_x] > 0:  # Bottom
+            starting_point = (pixel_x, five_percent+1)
+        elif skeleton_distances[five_percent+1, pixel_x-1] > 0:  # Bottom left
+            starting_point = (pixel_x-1, five_percent+1)
+        elif skeleton_distances[five_percent+1, pixel_x+1] > 0:  # Bottom right
+            starting_point = (pixel_x+1, five_percent+1)
         else:  # No valid points to do the pathing
-            print(f"No valid points to do the pathing for ({pixel_x}, {ten_percent})")
+            print(f"No valid points to do the pathing for ({pixel_x}, {five_percent})")
             continue
-        nodes, vessel_width = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, ten_percent))
+        nodes, vessel_width = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, five_percent))
         widening_location = get_location_of_widening(nodes, vessel_width)
         if widening_location is not None:
             return widening_location
@@ -390,7 +390,7 @@ class PathNode:
         self.parent = parent
 
 
-def follow_path(skeleton_distances, bifurcations, starting_point, parent=None):
+def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, crossing_regression_model=None):
     """
     Follows a path on the skeleton until it reaches a big change in width or a bifurcation.
     :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
@@ -398,12 +398,14 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None):
     :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
     :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
     It basically allows the algorithm to know in what direction to start pathing.
+    :param crossing_regression_model: Regression model computed with sklearn on the pixels of the vessel skeleton we want to find the continuity.
     :return: Returns a list of nodes representing the path taken and the vessel width along the path.
     """
-
+    nodes_in_path = 0
     parent_node = None if parent is None else PathNode(parent[0], parent[1])
     current_node = PathNode(starting_point[0], starting_point[1], parent_node)
     while True:
+        nodes_in_path += 1
         patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
         potential_points = []
         for y in range(patch.shape[0]):
@@ -428,12 +430,43 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None):
                 if abs(potential_point[0]) + abs(potential_point[1]) == 1:
                     next_point = potential_point
                     break
+
         current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
-        if bifurcations[current_node.y, current_node.x] > 0:
-            break  # finished on a bifurcation
+
+        is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
+        check_for_crossing = crossing_regression_model is not None and (nodes_in_path == 20 or is_bifurcation)
+        if is_bifurcation or check_for_crossing:
+            # compute linear regression on the last few points to get the vessel angle
+            reg = get_regression_model(current_node)
+            print("reg", reg.coef_, reg.intercept_)
+            if check_for_crossing:
+                print("crossing_regression_model", crossing_regression_model.coef_, crossing_regression_model.intercept_)
+            if is_bifurcation:
+                print("bifurcation")
+                # start a new path following on branches
+                _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
+                for branch_y, branch_x in branches:
+                    branch_point = (current_node.x + branch_x, current_node.y + branch_y)
+                    if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
+                        print(f"new branch ({branch_x}, {branch_y})")
+                        regression_model_param = crossing_regression_model if crossing_regression_model is not None else reg
+                        follow_path(skeleton_distances, bifurcations, branch_point, parent=(current_node.x, current_node.y), crossing_regression_model=regression_model_param)
+                break  # finished on a bifurcation
 
     nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
     return nodes, vessel_width
+
+
+def get_regression_model(end_node):
+    points = []
+    backtrack_node = end_node.parent
+    while backtrack_node is not None and len(points) < 20:
+        points.append([backtrack_node.x, backtrack_node.y])
+        backtrack_node = backtrack_node.parent
+    points = np.array(points)
+    x = points[:, np.newaxis,  0]
+    y = points[:, np.newaxis, 1]
+    return LinearRegression().fit(x, y)
 
 
 def get_nodes_and_vessel_width(end_node, skeleton_distances):
@@ -539,22 +572,8 @@ def vesselanalysis(image, out_name, use_scikit=True):
     for pixel in range(len(skel_x)):
         x = skel_x[pixel]
         y = skel_y[pixel]
-        patch = cvskelspur[x-1:x+2, y-1:y+2]
-        # The 3x3 patch needs at least 4 pixels to be a bifurcation, otherwise it's a single branch
-        if patch.sum() < 4:
-            continue
-        # We need to check the pixels around the center pixel to count the branches
-        # Pixels that are next to each other count as the same branch
-        branch_count = 0
-        previous_pixel = patch[0, 0] > 0
-        for patch_x, patch_y in [(0, 1), (0, 2), (1, 2), (2, 2), (2, 1), (2, 0), (1, 0), (0, 0)]:
-            if patch[patch_x, patch_y] > 0:
-                if not previous_pixel:
-                    branch_count += 1
-                previous_pixel = True
-            else:
-                previous_pixel = False
-        if branch_count > 2:
+        bifurcation, _ = detect_bifurcation((x, y), cvskelspur)
+        if bifurcation:
             bifurcation_pixels_x.append(x)
             bifurcation_pixels_y.append(y)
     print(len(bifurcation_pixels_x))
@@ -567,6 +586,40 @@ def vesselanalysis(image, out_name, use_scikit=True):
 
     skeleton_distance = cvskelspur * distance
     return skeleton_distance, bifurcations_layer
+
+
+def detect_bifurcation(point, skeleton):
+    """
+    Check the branches around a point on a skeleton to determine if it is a bifurcation.
+    :param point: Tuple (x, y)
+    :param skeleton: 2D ndarray representing the skeleton.
+    :return: A boolean revealing if the point is a bifurcation and a list containing the starting point of the branches.
+    """
+    branches = []
+    x = point[0]
+    y = point[1]
+    patch = skeleton[x-1:x+2, y-1:y+2]
+    # The 3x3 patch needs at least 4 pixels to be a bifurcation, otherwise it's a single branch
+    if patch.sum() < 4:
+        return False, branches
+    # We need to check the pixels around the center pixel to count the branches
+    for patch_x, patch_y in [(0, 1), (1, 0), (1, 2), (2, 1)]:
+        if patch[patch_x, patch_y] > 0:
+            branches.append((patch_x, patch_y))
+    # We also check the pixels in diagonal, but if they were next to an already identified branch, they count for the same branch
+    for patch_x, patch_y in [(0, 0), (2, 0), (0, 2), (2, 2)]:
+        if patch[patch_x, patch_y] > 0:
+            same_branch = False
+            for branch_x, branch_y in branches:
+                if abs(branch_x - patch_x) + abs(branch_y - patch_y) == 1:
+                    same_branch = True
+                    break
+            if not same_branch:
+                branches.append((patch_x, patch_y))
+    adjusted_branches = []
+    for branch in branches:
+        adjusted_branches.append((branch[0]-1, branch[1]-1))
+    return True, adjusted_branches
 
 
 def overlap(image, skeleton, out_name):
@@ -606,9 +659,11 @@ if __name__ == '__main__':
             skeleton[skeleton > 0] = 1
             visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
             visualization[:, :, 1] -= bifurcations
-            visualization[ostia[1], ostia[0], 2] -= 1
+            visualization[ostia[1], ostia[0], 0] -= 1
             plt.imshow(visualization)
             plt.show()
+        else:
+            print("Ostia not found")
     else:
         print("Input is a folder")
         for path, subfolders, files in os.walk(input_path):
