@@ -358,7 +358,7 @@ def fill_missing_pixels(image):
     image[np.where(res >= res.max() * 0.2)] = 255
 
 
-def find_ostia(skeleton_distances, bifurcations):
+def find_ostium(skeleton_distances, bifurcations):
     five_percent = int(skeleton_distances.shape[1] * 0.05)
     potential_catheters = np.where(skeleton_distances[five_percent, :] > 0)
     print(potential_catheters)
@@ -374,10 +374,13 @@ def find_ostia(skeleton_distances, bifurcations):
         else:  # No valid points to do the pathing
             print(f"No valid points to do the pathing for ({pixel_x}, {five_percent})")
             continue
-        nodes, vessel_width = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, five_percent))
+        nodes, vessel_width, _, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, five_percent))
+        print(ends_on_bifurcation)
         widening_location = get_location_of_widening(nodes, vessel_width)
         if widening_location is not None:
             return widening_location
+        elif ends_on_bifurcation:
+            return nodes[-1].x, nodes[-1].y
 
     return None
 
@@ -390,20 +393,52 @@ class PathNode:
         self.parent = parent
 
 
-def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, crossing_regression_model=None):
+class CrossingParams:
     """
-    Follows a path on the skeleton until it reaches a big change in width or a bifurcation.
+    This class contains the information necessary to deduce a crossing in the coronary tree skeleton from bifurcations.
+    """
+    def __init__(self, regression_model=None, vessel_width=0, maximum_bifurcations=2, crossing_params=None):
+        """
+        Constructor of the CrossingParams class.
+        :param regression_model: Regression model computed with sklearn on the pixels of the vessel skeleton (for the slope angle).
+        :param vessel_width: Size of the vessel to help with the crossing identification.
+        :param maximum_bifurcations: The maximum number of bifurcations to explore before stopping the search.
+        :param crossing_params: A CrossingParams object to copy. If set, will ignore the other parameters.
+        """
+        if crossing_params is None:
+            self.regression_model = regression_model
+            self.vessel_width = vessel_width
+            self.maximum_bifurcations = maximum_bifurcations
+            self.explored_bifurcations = []
+        else:
+            self.regression_model = crossing_params.regression_model
+            self.vessel_width = crossing_params.vessel_width
+            self.maximum_bifurcations = crossing_params.maximum_bifurcations
+            self.explored_bifurcations = crossing_params.explored_bifurcations.copy()
+
+
+def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, crossing_params=None):
+    """
+    Follows a path on the skeleton until it reaches a sudden change in width or a bifurcation.
     :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
     :param bifurcations: A 2D ndarray containing the points of bifurcations on the skeleton.
     :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
     :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
     It basically allows the algorithm to know in what direction to start pathing.
-    :param crossing_regression_model: Regression model computed with sklearn on the pixels of the vessel skeleton we want to find the continuity.
-    :return: Returns a list of nodes representing the path taken and the vessel width along the path.
+    :param crossing_params: CrossingParams object containing the necessary information to find the continuity of a vessel that hit a bifurcation.
+    :return: Returns multiple variables:
+      - A list of nodes representing the path taken
+      - The vessel width along the path
+      - A bool representing if the segment is a continuity of a previous one (when crossing_params is provided)
+      - A bool representing if the segment ended on a bifurcation
     """
     nodes_in_path = 0
+    nodes = []
+    vessel_width = 0
     parent_node = None if parent is None else PathNode(parent[0], parent[1])
     current_node = PathNode(starting_point[0], starting_point[1], parent_node)
+    is_crossing = False
+    ends_on_bifurcation = True
     while True:
         nodes_in_path += 1
         patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
@@ -421,6 +456,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
                     potential_points.append((x, y))
 
         if len(potential_points) == 0:
+            ends_on_bifurcation = False
             break  # finished on a dead end
 
         next_point = potential_points[0]
@@ -434,39 +470,73 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
         current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
 
         is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
-        check_for_crossing = crossing_regression_model is not None and (nodes_in_path == 20 or is_bifurcation)
+        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
         if is_bifurcation or check_for_crossing:
             # compute linear regression on the last few points to get the vessel angle
-            reg = get_regression_model(current_node)
-            print("reg", reg.coef_, reg.intercept_)
+            reg, (x, y) = get_regression_model(current_node)
+            print("current regression model", reg.coef_, reg.intercept_)
             if check_for_crossing:
-                print("crossing_regression_model", crossing_regression_model.coef_, crossing_regression_model.intercept_)
+                score = crossing_params.regression_model.score(x, y)
+                print("original regression model score =", score)
+                if score > 0.5:  # TODO also compare vessel width
+                    print("We might have found a crossing!")
+                    is_crossing = True
+                    crossing_params = None
             if is_bifurcation:
-                print("bifurcation")
-                # start a new path following on branches
-                _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
-                for branch_y, branch_x in branches:
-                    branch_point = (current_node.x + branch_x, current_node.y + branch_y)
-                    if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
-                        print(f"new branch ({branch_x}, {branch_y})")
-                        regression_model_param = crossing_regression_model if crossing_regression_model is not None else reg
-                        follow_path(skeleton_distances, bifurcations, branch_point, parent=(current_node.x, current_node.y), crossing_regression_model=regression_model_param)
+                bifurcation = (current_node.y, current_node.x)
+                if crossing_params is None or (bifurcation not in crossing_params.explored_bifurcations and len(crossing_params.explored_bifurcations) < crossing_params.maximum_bifurcations):
+                    print(f"exploring bifurcation {bifurcation}")
+                    # start a new path following on branches
+                    _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
+                    for branch_y, branch_x in branches:
+                        branch_point = (current_node.x + branch_x, current_node.y + branch_y)
+                        if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
+                            print(f"new branch ({branch_x}, {branch_y})")
+                            if crossing_params is None:
+                                new_crossing_params = CrossingParams(regression_model=reg, vessel_width=0, maximum_bifurcations=2)
+                            else:
+                                new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
+                            new_crossing_params.explored_bifurcations.append(bifurcation)
+                            branch_nodes, branch_vessel_width, crossing, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, branch_point, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params)
+                            if crossing:
+                                print("The crossing was found, no need to check the other branches")
+                                print(len(branch_nodes))
+                                nodes = branch_nodes
+                                vessel_width = branch_vessel_width
+                                is_crossing = True
+                                break
+                            else:
+                                print("Not a crossing")
+                else:
+                    if bifurcation in crossing_params.explored_bifurcations:
+                        print(f"Bifurcation {bifurcation} already explored")
+                    else:
+                        print(f"Maximum bifurcation count has been reached")
+                print(f"Finished bifurcation {bifurcation}")
                 break  # finished on a bifurcation
 
-    nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
-    return nodes, vessel_width
+    if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
+        nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
+    print(f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}")
+    return nodes, vessel_width, is_crossing, ends_on_bifurcation
 
 
-def get_regression_model(end_node):
+def get_regression_model(end_node, max_node_count=20):
+    """
+    Computes the regression model of the last X points of the vessel's skeleton.
+    :param end_node: Node from which to start backtracking.
+    :param max_node_count: Maximum number of nodes to consider for computing the regression model.
+    :return: The linear regression model and a tuple containing the X and Y values of the samples.
+    """
     points = []
     backtrack_node = end_node.parent
-    while backtrack_node is not None and len(points) < 20:
+    while backtrack_node is not None and len(points) < max_node_count:
         points.append([backtrack_node.x, backtrack_node.y])
         backtrack_node = backtrack_node.parent
     points = np.array(points)
     x = points[:, np.newaxis,  0]
     y = points[:, np.newaxis, 1]
-    return LinearRegression().fit(x, y)
+    return LinearRegression().fit(x, y), (x, y)
 
 
 def get_nodes_and_vessel_width(end_node, skeleton_distances):
@@ -654,16 +724,16 @@ if __name__ == '__main__':
         file_name = input_path.split(f".{file_type}")[0]
         fill_missing_pixels(image)
         skeleton, bifurcations = vesselanalysis(image, f"{file_name}_skeleton")
-        ostia = find_ostia(skeleton, bifurcations)
-        if ostia is not None:
+        ostium = find_ostium(skeleton, bifurcations)
+        if ostium is not None:
             skeleton[skeleton > 0] = 1
             visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
             visualization[:, :, 1] -= bifurcations
-            visualization[ostia[1], ostia[0], 0] -= 1
+            visualization[ostium[1], ostium[0], 0] -= 1
             plt.imshow(visualization)
             plt.show()
         else:
-            print("Ostia not found")
+            print("Ostium not found")
     else:
         print("Input is a folder")
         for path, subfolders, files in os.walk(input_path):
