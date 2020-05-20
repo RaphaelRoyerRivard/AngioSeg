@@ -364,7 +364,7 @@ def find_ostium(skeleton_distances, bifurcations):
     print(potential_catheters)
     # plt.imshow(skeleton_distances)
     # plt.show()
-    for pixel_x in potential_catheters[0]:
+    for pixel_x in reversed(potential_catheters[0]):
         if skeleton_distances[five_percent+1, pixel_x] > 0:  # Bottom
             starting_point = (pixel_x, five_percent+1)
         elif skeleton_distances[five_percent+1, pixel_x-1] > 0:  # Bottom left
@@ -375,7 +375,7 @@ def find_ostium(skeleton_distances, bifurcations):
             print(f"No valid points to do the pathing for ({pixel_x}, {five_percent})")
             continue
         nodes, vessel_width, _, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, five_percent))
-        print(ends_on_bifurcation)
+        print("Ends on bifurcation", ends_on_bifurcation)
         widening_location = get_location_of_widening(nodes, vessel_width)
         if widening_location is not None:
             return widening_location
@@ -455,26 +455,24 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
                             continue  # skip parent's parent point
                     potential_points.append((x, y))
 
-        if len(potential_points) == 0:
-            ends_on_bifurcation = False
-            break  # finished on a dead end
+        is_dead_end = len(potential_points) == 0
+        if not is_dead_end:
+            next_point = potential_points[0]
+            if len(potential_points) > 1:  # there was 2 new pixels next to the current point
+                # we find the closest one (the one that is not in diagonal)
+                for potential_point in potential_points:
+                    if abs(potential_point[0]) + abs(potential_point[1]) == 1:
+                        next_point = potential_point
+                        break
 
-        next_point = potential_points[0]
-        if len(potential_points) > 1:  # there was 2 new pixels next to the current point
-            # we find the closest one (the one that is not in diagonal)
-            for potential_point in potential_points:
-                if abs(potential_point[0]) + abs(potential_point[1]) == 1:
-                    next_point = potential_point
-                    break
-
-        current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
+            current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
 
         is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
-        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
+        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and (is_bifurcation or is_dead_end)))
         if is_bifurcation or check_for_crossing:
             # compute linear regression on the last few points to get the vessel angle
             reg, (x, y) = get_regression_model(current_node)
-            print("current regression model", reg.coef_, reg.intercept_)
+            print(f"current regression model from {nodes_in_path} nodes", reg.coef_, reg.intercept_)
             if check_for_crossing:
                 score = crossing_params.regression_model.score(x, y)
                 print("original regression model score =", score)
@@ -500,7 +498,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
                             branch_nodes, branch_vessel_width, crossing, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, branch_point, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params)
                             if crossing:
                                 print("The crossing was found, no need to check the other branches")
-                                print(len(branch_nodes))
+                                print(f"Branch has {len(branch_nodes)} nodes")
                                 nodes = branch_nodes
                                 vessel_width = branch_vessel_width
                                 is_crossing = True
@@ -514,6 +512,10 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
                         print(f"Maximum bifurcation count has been reached")
                 print(f"Finished bifurcation {bifurcation}")
                 break  # finished on a bifurcation
+
+        if is_dead_end:
+            ends_on_bifurcation = False
+            break  # finished on a dead end
 
     if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
         nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
@@ -646,7 +648,7 @@ def vesselanalysis(image, out_name, use_scikit=True):
         if bifurcation:
             bifurcation_pixels_x.append(x)
             bifurcation_pixels_y.append(y)
-    print(len(bifurcation_pixels_x))
+    print(f"{len(bifurcation_pixels_x)} bifurcations identified")
     bifurcations_layer = np.zeros(cvskelspur.shape, dtype=np.uint8)
     bifurcations_layer[np.array(bifurcation_pixels_x, dtype=np.int), np.array(bifurcation_pixels_y, dtype=np.int)] = 1
     bifurcations = np.repeat(cvskelspur[:, :, np.newaxis], 3, axis=2)
@@ -689,22 +691,30 @@ def detect_bifurcation(point, skeleton):
     adjusted_branches = []
     for branch in branches:
         adjusted_branches.append((branch[0]-1, branch[1]-1))
-    return True, adjusted_branches
+    return len(adjusted_branches) >= 3, adjusted_branches
 
 
-def overlap(image, skeleton, out_name):
+def overlap(image, segmentation_image, skeleton, bifurcations, out_name):
+    segmentation_alpha = 0.5
     # Overlapping skeleton and original image
     rgb_image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
+    segmentation_indices = segmentation_image.nonzero()
     skeleton_indices = skeleton.nonzero()
-    if len(skeleton.shape) == 2:
-        rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 0
-        rgb_image[skeleton_indices[0], skeleton_indices[1], 1] = 255
-    else:
-        rgb_image[skeleton_indices[0], skeleton_indices[1], :] = skeleton[skeleton_indices[0], skeleton_indices[1], :]
+    bifurcations_indices = bifurcations.nonzero()
+    rgb_image[segmentation_indices[0], segmentation_indices[1], 1] = segmentation_alpha * rgb_image[segmentation_indices[0], segmentation_indices[1], 0] + (1 - segmentation_alpha) * segmentation_image[segmentation_indices]
+    rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 255
+    rgb_image[bifurcations_indices[0], bifurcations_indices[1], 1] = 0
     cv2.imwrite(out_name, rgb_image)
 
 
 if __name__ == '__main__':
+    """
+    To create the overlap image in a folder that has an angiography image and a segmentation image with the same name + "_seg", use these command line parameters:
+    python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --file_type tif --visualize True
+    
+    To find the ostium based on a segmentation file, use these command line parameters:
+    python src/VESSELANALYSIS/vesselanalysis.py --input [file]
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', default='.', help='input file or folder in which to search recursively for images of segmented frames to skeletonize')
     parser.add_argument('--file_type', default='png', help='type of images to skeletonize (png, jpg, tif, etc)')
@@ -761,9 +771,11 @@ if __name__ == '__main__':
                 if not os.path.exists(output_folder):
                     os.mkdir(output_folder)
 
+                if visualize and "_seg" in file:
+                    continue
+
                 image_path = f'{path}\\{file}'
                 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-                fill_missing_pixels(image)
 
                 if visualize:
                     # file_name = file.split(".jpg")[0]
@@ -772,15 +784,17 @@ if __name__ == '__main__':
                     #     skeleton = cv2.imread(f'{skeleton_file_name}_components.png', cv2.IMREAD_COLOR)
                     # else:
                     #     skeleton = cv2.imread(f'{skeleton_file_name}.png', cv2.IMREAD_GRAYSCALE)
-                    file_name = file.split("seg")[0]
-                    output = f'{output_folder}\\{file_name}skeletonized'
-                    skeleton, components = vesselanalysis(image, output)
-                    output = f'{output_folder}\\{file_name}overlap.png'
-                    image_path = f'{path}\\{file_name[:-1]}{image_type}'
-                    print(image_path)
-                    image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-                    overlap(image, skeleton, output)
+                    file_name = file.split(f".{file_type}")[0]
+                    segmentation_file_name = f"{file_name}_seg"
+                    segmentation_file = f"{path}\\{segmentation_file_name}.{file_type}"
+                    seg_image = cv2.imread(segmentation_file, cv2.IMREAD_GRAYSCALE)
+                    fill_missing_pixels(seg_image)
+                    output = f'{output_folder}\\{file_name}_skeleton'
+                    skeleton, components = vesselanalysis(seg_image, output)
+                    output = f'{output_folder}\\{file_name}_overlap.png'
+                    overlap(image, seg_image, skeleton, components, output)
                 else:
+                    fill_missing_pixels(image)
                     # file_name = file.split("segmented")[0]
                     file_name = file.split("seg")[0]
                     output = f'{output_folder}\\{file_name}skeletonized'
