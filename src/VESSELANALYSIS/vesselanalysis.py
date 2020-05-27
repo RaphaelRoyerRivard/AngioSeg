@@ -359,26 +359,42 @@ def fill_missing_pixels(image):
 
 
 def find_ostium(skeleton_distances, bifurcations):
-    five_percent = int(skeleton_distances.shape[1] * 0.05)
-    potential_catheters = np.where(skeleton_distances[five_percent, :] > 0)
+    percent_with_one_possible_catheter = -1
+    percent_with_two_possible_catheters = -1
+    for i in range(10):
+        image_percent = int(skeleton_distances.shape[1] * i / 100)
+        potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)
+        if len(potential_catheters[0]) == 2:
+            percent_with_two_possible_catheters = image_percent
+            break
+        if len(potential_catheters[0]) == 1 and percent_with_one_possible_catheter < 0:
+            percent_with_one_possible_catheter = image_percent
+    if percent_with_two_possible_catheters > 0:
+        percent = percent_with_two_possible_catheters
+    elif percent_with_one_possible_catheter > 0:
+        percent = percent_with_two_possible_catheters
+    else:
+        print("Cannot find a possible catheter")
+        return None
+
+    potential_catheters = np.where(skeleton_distances[percent, :] > 0)
     print("potential catheters", potential_catheters[0])
     for pixel_x in potential_catheters[0]:
-        print(f"\nTrying for pontential catheter at ({pixel_x}, {five_percent})")
-        if skeleton_distances[five_percent+1, pixel_x] > 0:  # Bottom
-            starting_point = (pixel_x, five_percent+1)
-        elif skeleton_distances[five_percent+1, pixel_x-1] > 0:  # Bottom left
-            starting_point = (pixel_x-1, five_percent+1)
-        elif skeleton_distances[five_percent+1, pixel_x+1] > 0:  # Bottom right
-            starting_point = (pixel_x+1, five_percent+1)
+        print(f"\nTrying for pontential catheter at ({pixel_x}, {percent})")
+        if skeleton_distances[percent+1, pixel_x] > 0:  # Bottom
+            starting_point = (pixel_x, percent+1)
+        elif skeleton_distances[percent+1, pixel_x-1] > 0:  # Bottom left
+            starting_point = (pixel_x-1, percent+1)
+        elif skeleton_distances[percent+1, pixel_x+1] > 0:  # Bottom right
+            starting_point = (pixel_x+1, percent+1)
         else:  # No valid points to do the pathing
-            print(f"No valid points to do the pathing for ({pixel_x}, {five_percent})")
+            print(f"No valid points to do the pathing for ({pixel_x}, {percent})")
             continue
-        nodes, vessel_width, _, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, five_percent))
-        print("Ends on bifurcation", ends_on_bifurcation)
-        widening_location = get_location_of_widening(nodes, vessel_width)
-        if widening_location is not None:
-            return widening_location
-        elif ends_on_bifurcation:
+        nodes, vessel_width, _, ends_on_bifurcation, ostium_location = follow_path(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent))
+        if ostium_location is not None:
+            print("ostium:", ostium_location)
+            return ostium_location
+        if ends_on_bifurcation:
             return nodes[-1].x, nodes[-1].y
 
     return None
@@ -432,6 +448,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
       - The vessel width along the path
       - A bool representing if the segment is a continuity of a previous one (when crossing_params is provided)
       - A bool representing if the segment ended on a bifurcation
+      - The location of the ostium if found
     """
     nodes_in_path = 0
     nodes = []
@@ -440,6 +457,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
     current_node = PathNode(starting_point[0], starting_point[1], parent_node)
     is_crossing = False
     ends_on_bifurcation = True
+    ostium_location = None
     while True:
         nodes_in_path += 1
         patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
@@ -474,6 +492,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
         check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and (is_bifurcation or is_dead_end)))
         if is_bifurcation or check_for_crossing:
             # compute linear regression on the last few points to get the vessel angle
+            # TODO use angle from vector instead of linear regression
             reg, (x, y), vessel_width = get_regression_model_and_vessel_width(current_node, skeleton_distances)
             print_recursion_log(recursion_level, f"current regression model from {nodes_in_path} nodes {reg.coef_} {reg.intercept_}")
             if check_for_crossing:
@@ -488,10 +507,17 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                 bifurcation = (current_node.y, current_node.x)
                 if crossing_params is None or (bifurcation not in crossing_params.explored_bifurcations and len(crossing_params.explored_bifurcations) < crossing_params.maximum_bifurcations):
                     if search_for_ostium and crossing_params is None:
-                        # TODO analyze width and angle to find the ostium
-                        nodes, _ = get_nodes_and_vessel_width(current_node, skeleton_distances)
-                        # widening_location = get_location_of_widening(nodes, vessel_width)
+                        nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
                         sharp_angle_location = get_location_of_sharp_angle(nodes)
+                        if sharp_angle_location is not None:
+                            print_recursion_log(recursion_level, f"sharp angle location: {sharp_angle_location}")
+                            ostium_location = sharp_angle_location
+                            break
+                        widening_location = get_location_of_widening(nodes, vessel_widths)
+                        if widening_location is not None:
+                            print_recursion_log(recursion_level, f"widening location: {widening_location}")
+                            ostium_location = widening_location
+                            break
                     print_recursion_log(recursion_level, f"exploring bifurcation {bifurcation}")
                     # start a new path following on branches
                     _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
@@ -504,7 +530,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                             else:
                                 new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
                             new_crossing_params.explored_bifurcations.append(bifurcation)
-                            branch_nodes, branch_vessel_width, crossing, _ = follow_path(skeleton_distances, bifurcations, branch_point, search_for_ostium=search_for_ostium, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params, recursion_level=recursion_level+1)
+                            branch_nodes, branch_vessel_width, crossing, ends_on_bifurcation, ostium_location = follow_path(skeleton_distances, bifurcations, branch_point, search_for_ostium=search_for_ostium, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params, recursion_level=recursion_level+1)
                             if crossing:
                                 print_recursion_log(recursion_level, "The crossing was found, no need to check the other branches")
                                 print_recursion_log(recursion_level, f"Branch has {len(branch_nodes)} nodes")
@@ -530,8 +556,8 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
 
     if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
         nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
-    print_recursion_log(recursion_level, f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}")
-    return nodes, vessel_width, is_crossing, ends_on_bifurcation
+    print_recursion_log(recursion_level, f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}, ostium location: {ostium_location}")
+    return nodes, vessel_width, is_crossing, ends_on_bifurcation, ostium_location
 
 
 def print_recursion_log(recursion_level, text):
@@ -583,6 +609,12 @@ def get_nodes_and_vessel_width(end_node, skeleton_distances):
 def get_location_of_widening(nodes, vessel_width):
     plt.title("Vessel width for pixels of skeleton segment")
     plt.plot(vessel_width)
+    for i in range(10, len(vessel_width)):
+        if vessel_width[i-10] > 0:
+            ratio = vessel_width[i] / vessel_width[i-10]
+            if ratio >= 1.5:
+                plt.axvline(i)
+                break
     plt.xlabel("Segment pixel #")
     plt.ylabel("Vessel width in pixels")
     plt.show()
@@ -597,92 +629,110 @@ def get_location_of_widening(nodes, vessel_width):
 
 
 def get_location_of_sharp_angle(nodes):
-    REGRESSION_PIXEL_COUNT = 5
-    degrees = []
-    vectors = []
-    for i in range(REGRESSION_PIXEL_COUNT-1, len(nodes)):
+    VECTOR_PIXEL_COUNT = 5
+    angles = []
+    for i in range(VECTOR_PIXEL_COUNT-1, len(nodes)):
         points = []
         diff_vectors = []
-        for j in reversed(range(REGRESSION_PIXEL_COUNT-1)):
-            node = nodes[i-j]
-            previous_node = nodes[i-j-1]
-            diff_vectors.append([node.x - previous_node.x, -node.y + previous_node.y])
-        for j in reversed(range(REGRESSION_PIXEL_COUNT)):
+        for j in reversed(range(VECTOR_PIXEL_COUNT-1)):
             node = nodes[i-j]
             points.append([node.x, -node.y])
-        print(points)
+            if j < VECTOR_PIXEL_COUNT-1:
+                previous_node = nodes[i-j-1]
+                diff_vectors.append([node.x - previous_node.x, -node.y + previous_node.y])
+        # print(points)
+        points = np.array(points)
         diff_vectors = np.array(diff_vectors)
         sumed_vector = np.sum(diff_vectors, axis=0)
-        normalized_vector = sumed_vector / np.linalg.norm(sumed_vector)
-        print(sumed_vector, normalized_vector)
-        vectors.append(normalized_vector)
-        points = np.array(points)
-        sum_x = points[:, 0].sum()
-        sum_square_x = (points[:, 0] ** 2).sum()
-        sum_y = points[:, 1].sum()
-        sum_xy = (points[:, 0] * points[:, 1]).sum()
-        denominator = REGRESSION_PIXEL_COUNT * sum_square_x - sum_x ** 2
-        if denominator == 0:
-            slope = math.inf
-        else:
-            numerator = REGRESSION_PIXEL_COUNT * sum_xy - sum_x * sum_y
-            slope = numerator / denominator
-            if slope == 0:
-                print(numerator, "/", denominator)
-        angle = math.degrees(math.atan(slope))
-        if points[0, 1] < points[-1, 1]:  # vessel is going up
-            if angle < 0:
-                print("Going up, adding 180")
-                angle += 180
-            elif angle == 0:
-                print("Bug with linear regression, setting to 90")
-                angle = 90
-        elif points[0, 1] > points[-1, 1]:  # vessel is going down
-            if angle > 0:
-                print("Going down, subtracting 180")
-                angle -= 180
-            elif angle == 0:
-                print("Bug with linear regression, setting to -90")
-                angle = -90
-        if points[0, 0] < points[-1, 0]:  # vessel is going right
-            if angle > 90:
-                print("Going right, subtracting 180")
-                angle -= 180
-            elif angle < -90:
-                print("Going right, adding 180")
-                angle += 180
-        elif points[0, 0] > points[-1, 0]:  # vessel is going left
-            if abs(angle) < 90:
-                if angle > 0:
-                    print("Going left, subtracting 180")
-                    angle -= 180
-                else:
-                    print("Going left, adding 180")
-                    angle += 180
-        angle_diff = angle if len(degrees) == 0 else angle - degrees[-1]
-        if angle_diff > 180:
-            print("Subtracting 360 to keep close")
-            angle -= 360
-        elif angle_diff < -180:
-            print("Adding 360 to keep close")
-            angle += 360
-        degrees.append(angle)
-        print(i-REGRESSION_PIXEL_COUNT+1, "slope:", slope, "angle:", angle)
+        previous_angle = float('inf') if len(angles) == 0 else angles[-1]
+        angle = get_angle_from_vector(sumed_vector, points, previous_angle)
+        angles.append(angle)
+        # print(i-VECTOR_PIXEL_COUNT+1, "angle:", angle)
 
-    vectors = np.array(vectors)
-    vectors_x = gaussian_filter1d(vectors[:, 0], 5)
-    vectors_y = gaussian_filter1d(vectors[:, 1], 5)
-    vectors_x_gradient = np.gradient(vectors_x)
-    vectors_y_gradient = np.gradient(vectors_y)
-    vectors_gradient_sum = abs(vectors_x_gradient) + abs(vectors_y_gradient)
-    plt.title("Gradient of normalized direction vector of the skeleton segment")
-    plt.plot(vectors_gradient_sum)
-    plt.axhline(vectors_gradient_sum.mean())
-    plt.legend()
+    if len(angles) < 5:
+        return None
+
+    angles = np.array(angles)
+    angles = gaussian_filter1d(angles, 5)
+    degrees_gradient = abs(np.gradient(angles))
+    plt.title("Angle gradient of direction vector of the skeleton segment")
+    plt.axhline(degrees_gradient.mean(), color='g')
+    if degrees_gradient.max() >= 3:
+        node = nodes[degrees_gradient.argmax() - int(VECTOR_PIXEL_COUNT/2)]
+        print(node.x, node.y)
+        plt.axvline(degrees_gradient.argmax(), color='r')
+    plt.plot(degrees_gradient)
     plt.xlabel("Segment pixel #")
-    plt.ylabel("Gradient of normalized direction vector")
+    plt.ylabel("Angle gradient of direction vector")
     plt.show()
+
+    if degrees_gradient.max() >= 3:
+        start = 0
+        end = len(degrees_gradient)
+        above_average = degrees_gradient > degrees_gradient.mean()
+        for i in range(degrees_gradient.argmax(), 0, -1):
+            if not above_average[i]:
+                start = i
+                break
+        for i in range(degrees_gradient.argmax(), len(degrees_gradient)):
+            if not above_average[i]:
+                end = i
+                break
+        print(end-start, "pixels long")
+        if end - start <= 25:
+            node = nodes[degrees_gradient.argmax() + int(VECTOR_PIXEL_COUNT/2)]
+            return [node.x, node.y]
     return None
+
+
+def get_angle_from_vector(vector, points, previous_angle=float('inf'), debug=False):
+    angle = math.degrees(math.atan2(vector[1], vector[0]))
+    if points[0, 1] < points[-1, 1]:  # vessel is going up
+        if angle < 0:
+            if debug:
+                print("Going up, adding 180")
+            angle += 180
+        elif angle == 0:
+            if debug:
+                print("Bug with linear regression, setting to 90")
+            angle = 90
+    elif points[0, 1] > points[-1, 1]:  # vessel is going down
+        if angle > 0:
+            if debug:
+                print("Going down, subtracting 180")
+            angle -= 180
+        elif angle == 0:
+            if debug:
+                print("Bug with linear regression, setting to -90")
+            angle = -90
+    if points[0, 0] < points[-1, 0]:  # vessel is going right
+        if angle > 90:
+            if debug:
+                print("Going right, subtracting 180")
+            angle -= 180
+        elif angle < -90:
+            if debug:
+                print("Going right, adding 180")
+            angle += 180
+    elif points[0, 0] > points[-1, 0]:  # vessel is going left
+        if abs(angle) < 90:
+            if angle > 0:
+                if debug:
+                    print("Going left, subtracting 180")
+                angle -= 180
+            else:
+                print("Going left, adding 180")
+                angle += 180
+    angle_diff = angle if previous_angle == float('inf') else angle - previous_angle
+    if angle_diff > 180:
+        if debug:
+            print("Subtracting 360 to keep close")
+        angle -= 360
+    elif angle_diff < -180:
+        if debug:
+            print("Adding 360 to keep close")
+        angle += 360
+    return angle
 
 
 def vesselanalysis(image, out_name, use_scikit=True):
