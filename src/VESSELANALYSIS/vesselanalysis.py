@@ -361,10 +361,9 @@ def fill_missing_pixels(image):
 def find_ostium(skeleton_distances, bifurcations):
     five_percent = int(skeleton_distances.shape[1] * 0.05)
     potential_catheters = np.where(skeleton_distances[five_percent, :] > 0)
-    print(potential_catheters)
-    # plt.imshow(skeleton_distances)
-    # plt.show()
-    for pixel_x in reversed(potential_catheters[0]):
+    print("potential catheters", potential_catheters[0])
+    for pixel_x in potential_catheters[0]:
+        print(f"\nTrying for pontential catheter at ({pixel_x}, {five_percent})")
         if skeleton_distances[five_percent+1, pixel_x] > 0:  # Bottom
             starting_point = (pixel_x, five_percent+1)
         elif skeleton_distances[five_percent+1, pixel_x-1] > 0:  # Bottom left
@@ -374,7 +373,7 @@ def find_ostium(skeleton_distances, bifurcations):
         else:  # No valid points to do the pathing
             print(f"No valid points to do the pathing for ({pixel_x}, {five_percent})")
             continue
-        nodes, vessel_width, _, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, starting_point, (pixel_x, five_percent))
+        nodes, vessel_width, _, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, five_percent))
         print("Ends on bifurcation", ends_on_bifurcation)
         widening_location = get_location_of_widening(nodes, vessel_width)
         if widening_location is not None:
@@ -417,15 +416,17 @@ class CrossingParams:
             self.explored_bifurcations = crossing_params.explored_bifurcations.copy()
 
 
-def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, crossing_params=None):
+def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ostium=False, parent=None, crossing_params=None, recursion_level=0):
     """
     Follows a path on the skeleton until it reaches a sudden change in width or a bifurcation.
     :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
     :param bifurcations: A 2D ndarray containing the points of bifurcations on the skeleton.
     :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
+    :param search_for_ostium: A bool representing if we are searching for the ostium (by analysing the vessel width and .
     :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
     It basically allows the algorithm to know in what direction to start pathing.
     :param crossing_params: CrossingParams object containing the necessary information to find the continuity of a vessel that hit a bifurcation.
+    :param recursion_level: Integer used for increasing the readability of the logs.
     :return: Returns multiple variables:
       - A list of nodes representing the path taken
       - The vessel width along the path
@@ -460,8 +461,10 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
             next_point = potential_points[0]
             if len(potential_points) > 1:  # there was 2 new pixels next to the current point
                 # we find the closest one (the one that is not in diagonal)
+                # adjacents are: (0,1), (1,0), (1,2), (2,1)
+                # diagonals are: (0,0), (2,0), (0,2), (2,2)
                 for potential_point in potential_points:
-                    if abs(potential_point[0]) + abs(potential_point[1]) == 1:
+                    if abs(potential_point[0] - potential_point[1]) == 1:
                         next_point = potential_point
                         break
 
@@ -471,46 +474,54 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
         check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and (is_bifurcation or is_dead_end)))
         if is_bifurcation or check_for_crossing:
             # compute linear regression on the last few points to get the vessel angle
-            reg, (x, y) = get_regression_model(current_node)
-            print(f"current regression model from {nodes_in_path} nodes", reg.coef_, reg.intercept_)
+            reg, (x, y), vessel_width = get_regression_model_and_vessel_width(current_node, skeleton_distances)
+            print_recursion_log(recursion_level, f"current regression model from {nodes_in_path} nodes {reg.coef_} {reg.intercept_}")
             if check_for_crossing:
                 score = crossing_params.regression_model.score(x, y)
-                print("original regression model score =", score)
-                if score > 0.5:  # TODO also compare vessel width
-                    print("We might have found a crossing!")
+                vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
+                print_recursion_log(recursion_level, f"original regression model score = {score}, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)")
+                if score > -50 and 0.85 <= vessel_width_ratio <= 1.15:
+                    print_recursion_log(recursion_level, "We might have found a crossing!")
                     is_crossing = True
                     crossing_params = None
             if is_bifurcation:
                 bifurcation = (current_node.y, current_node.x)
                 if crossing_params is None or (bifurcation not in crossing_params.explored_bifurcations and len(crossing_params.explored_bifurcations) < crossing_params.maximum_bifurcations):
-                    print(f"exploring bifurcation {bifurcation}")
+                    if search_for_ostium and crossing_params is None:
+                        # TODO analyze width and angle to find the ostium
+                        nodes, _ = get_nodes_and_vessel_width(current_node, skeleton_distances)
+                        # widening_location = get_location_of_widening(nodes, vessel_width)
+                        sharp_angle_location = get_location_of_sharp_angle(nodes)
+                    print_recursion_log(recursion_level, f"exploring bifurcation {bifurcation}")
                     # start a new path following on branches
                     _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
-                    for branch_y, branch_x in branches:
+                    for b, (branch_y, branch_x) in enumerate(branches):
                         branch_point = (current_node.x + branch_x, current_node.y + branch_y)
                         if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
-                            print(f"new branch ({branch_x}, {branch_y})")
+                            print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) of {len(branches)}")
                             if crossing_params is None:
-                                new_crossing_params = CrossingParams(regression_model=reg, vessel_width=0, maximum_bifurcations=2)
+                                new_crossing_params = CrossingParams(regression_model=reg, vessel_width=vessel_width, maximum_bifurcations=2)
                             else:
                                 new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
                             new_crossing_params.explored_bifurcations.append(bifurcation)
-                            branch_nodes, branch_vessel_width, crossing, ends_on_bifurcation = follow_path(skeleton_distances, bifurcations, branch_point, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params)
+                            branch_nodes, branch_vessel_width, crossing, _ = follow_path(skeleton_distances, bifurcations, branch_point, search_for_ostium=search_for_ostium, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params, recursion_level=recursion_level+1)
                             if crossing:
-                                print("The crossing was found, no need to check the other branches")
-                                print(f"Branch has {len(branch_nodes)} nodes")
+                                print_recursion_log(recursion_level, "The crossing was found, no need to check the other branches")
+                                print_recursion_log(recursion_level, f"Branch has {len(branch_nodes)} nodes")
                                 nodes = branch_nodes
                                 vessel_width = branch_vessel_width
                                 is_crossing = True
                                 break
                             else:
-                                print("Not a crossing")
+                                print_recursion_log(recursion_level, "Not a crossing")
+                        else:
+                            print_recursion_log(recursion_level, f"branch {b} is the parent")
                 else:
                     if bifurcation in crossing_params.explored_bifurcations:
-                        print(f"Bifurcation {bifurcation} already explored")
+                        print_recursion_log(recursion_level, f"Bifurcation {bifurcation} already explored")
                     else:
-                        print(f"Maximum bifurcation count has been reached")
-                print(f"Finished bifurcation {bifurcation}")
+                        print_recursion_log(recursion_level, f"Maximum bifurcation count has been reached")
+                print_recursion_log(recursion_level, f"Finished bifurcation {bifurcation}")
                 break  # finished on a bifurcation
 
         if is_dead_end:
@@ -519,11 +530,15 @@ def follow_path(skeleton_distances, bifurcations, starting_point, parent=None, c
 
     if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
         nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
-    print(f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}")
+    print_recursion_log(recursion_level, f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}")
     return nodes, vessel_width, is_crossing, ends_on_bifurcation
 
 
-def get_regression_model(end_node, max_node_count=20):
+def print_recursion_log(recursion_level, text):
+    print(f"{'    ' * recursion_level}{text}")
+
+
+def get_regression_model_and_vessel_width(end_node, skeleton_distances, max_node_count=20, ):
     """
     Computes the regression model of the last X points of the vessel's skeleton.
     :param end_node: Node from which to start backtracking.
@@ -532,13 +547,20 @@ def get_regression_model(end_node, max_node_count=20):
     """
     points = []
     backtrack_node = end_node.parent
+    vessel_width = 0
     while backtrack_node is not None and len(points) < max_node_count:
         points.append([backtrack_node.x, backtrack_node.y])
+        vessel_width += skeleton_distances[backtrack_node.y, backtrack_node.x]
         backtrack_node = backtrack_node.parent
+    if len(points) > 0:
+        vessel_width /= len(points)
     points = np.array(points)
-    x = points[:, np.newaxis,  0]
-    y = points[:, np.newaxis, 1]
-    return LinearRegression().fit(x, y), (x, y)
+    x = points[:, np.newaxis, 0]
+    y = -points[:, np.newaxis, 1]
+    # plt.title(f"{len(points)} nodes")
+    # plt.plot(x, y, 'ro')
+    # plt.show()
+    return LinearRegression().fit(x, y), (x, y), vessel_width
 
 
 def get_nodes_and_vessel_width(end_node, skeleton_distances):
@@ -571,6 +593,95 @@ def get_location_of_widening(nodes, vessel_width):
             if ratio >= 1.5:
                 return nodes[i].x, nodes[i].y
 
+    return None
+
+
+def get_location_of_sharp_angle(nodes):
+    REGRESSION_PIXEL_COUNT = 5
+    degrees = []
+    vectors = []
+    for i in range(REGRESSION_PIXEL_COUNT-1, len(nodes)):
+        points = []
+        diff_vectors = []
+        for j in reversed(range(REGRESSION_PIXEL_COUNT-1)):
+            node = nodes[i-j]
+            previous_node = nodes[i-j-1]
+            diff_vectors.append([node.x - previous_node.x, -node.y + previous_node.y])
+        for j in reversed(range(REGRESSION_PIXEL_COUNT)):
+            node = nodes[i-j]
+            points.append([node.x, -node.y])
+        print(points)
+        diff_vectors = np.array(diff_vectors)
+        sumed_vector = np.sum(diff_vectors, axis=0)
+        normalized_vector = sumed_vector / np.linalg.norm(sumed_vector)
+        print(sumed_vector, normalized_vector)
+        vectors.append(normalized_vector)
+        points = np.array(points)
+        sum_x = points[:, 0].sum()
+        sum_square_x = (points[:, 0] ** 2).sum()
+        sum_y = points[:, 1].sum()
+        sum_xy = (points[:, 0] * points[:, 1]).sum()
+        denominator = REGRESSION_PIXEL_COUNT * sum_square_x - sum_x ** 2
+        if denominator == 0:
+            slope = math.inf
+        else:
+            numerator = REGRESSION_PIXEL_COUNT * sum_xy - sum_x * sum_y
+            slope = numerator / denominator
+            if slope == 0:
+                print(numerator, "/", denominator)
+        angle = math.degrees(math.atan(slope))
+        if points[0, 1] < points[-1, 1]:  # vessel is going up
+            if angle < 0:
+                print("Going up, adding 180")
+                angle += 180
+            elif angle == 0:
+                print("Bug with linear regression, setting to 90")
+                angle = 90
+        elif points[0, 1] > points[-1, 1]:  # vessel is going down
+            if angle > 0:
+                print("Going down, subtracting 180")
+                angle -= 180
+            elif angle == 0:
+                print("Bug with linear regression, setting to -90")
+                angle = -90
+        if points[0, 0] < points[-1, 0]:  # vessel is going right
+            if angle > 90:
+                print("Going right, subtracting 180")
+                angle -= 180
+            elif angle < -90:
+                print("Going right, adding 180")
+                angle += 180
+        elif points[0, 0] > points[-1, 0]:  # vessel is going left
+            if abs(angle) < 90:
+                if angle > 0:
+                    print("Going left, subtracting 180")
+                    angle -= 180
+                else:
+                    print("Going left, adding 180")
+                    angle += 180
+        angle_diff = angle if len(degrees) == 0 else angle - degrees[-1]
+        if angle_diff > 180:
+            print("Subtracting 360 to keep close")
+            angle -= 360
+        elif angle_diff < -180:
+            print("Adding 360 to keep close")
+            angle += 360
+        degrees.append(angle)
+        print(i-REGRESSION_PIXEL_COUNT+1, "slope:", slope, "angle:", angle)
+
+    vectors = np.array(vectors)
+    vectors_x = gaussian_filter1d(vectors[:, 0], 5)
+    vectors_y = gaussian_filter1d(vectors[:, 1], 5)
+    vectors_x_gradient = np.gradient(vectors_x)
+    vectors_y_gradient = np.gradient(vectors_y)
+    vectors_gradient_sum = abs(vectors_x_gradient) + abs(vectors_y_gradient)
+    plt.title("Gradient of normalized direction vector of the skeleton segment")
+    plt.plot(vectors_gradient_sum)
+    plt.axhline(vectors_gradient_sum.mean())
+    plt.legend()
+    plt.xlabel("Segment pixel #")
+    plt.ylabel("Gradient of normalized direction vector")
+    plt.show()
     return None
 
 
@@ -695,13 +806,13 @@ def detect_bifurcation(point, skeleton):
 
 
 def overlap(image, segmentation_image, skeleton, bifurcations, out_name):
-    segmentation_alpha = 0.5
+    segmentation_alpha = 0.3
     # Overlapping skeleton and original image
     rgb_image = np.repeat(image[:, :, np.newaxis], 3, axis=2)
     segmentation_indices = segmentation_image.nonzero()
     skeleton_indices = skeleton.nonzero()
     bifurcations_indices = bifurcations.nonzero()
-    rgb_image[segmentation_indices[0], segmentation_indices[1], 1] = segmentation_alpha * rgb_image[segmentation_indices[0], segmentation_indices[1], 0] + (1 - segmentation_alpha) * segmentation_image[segmentation_indices]
+    rgb_image[segmentation_indices[0], segmentation_indices[1], 1] = (1 - segmentation_alpha) * rgb_image[segmentation_indices[0], segmentation_indices[1], 0] + segmentation_alpha * segmentation_image[segmentation_indices]
     rgb_image[skeleton_indices[0], skeleton_indices[1], :] = 255
     rgb_image[bifurcations_indices[0], bifurcations_indices[1], 1] = 0
     cv2.imwrite(out_name, rgb_image)
@@ -732,18 +843,19 @@ if __name__ == '__main__':
         file_type = input_path.split('.')[-1]
         image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
         file_name = input_path.split(f".{file_type}")[0]
+        file_name = file_name.split("_seg")[0]
         fill_missing_pixels(image)
         skeleton, bifurcations = vesselanalysis(image, f"{file_name}_skeleton")
         ostium = find_ostium(skeleton, bifurcations)
+        skeleton[skeleton > 0] = 1
+        visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
+        visualization[:, :, 1] -= bifurcations
         if ostium is not None:
-            skeleton[skeleton > 0] = 1
-            visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
-            visualization[:, :, 1] -= bifurcations
             visualization[ostium[1], ostium[0], 0] -= 1
-            plt.imshow(visualization)
-            plt.show()
         else:
             print("Ostium not found")
+        plt.imshow(visualization)
+        plt.show()
     else:
         print("Input is a folder")
         for path, subfolders, files in os.walk(input_path):
@@ -789,6 +901,7 @@ if __name__ == '__main__':
                     segmentation_file = f"{path}\\{segmentation_file_name}.{file_type}"
                     seg_image = cv2.imread(segmentation_file, cv2.IMREAD_GRAYSCALE)
                     fill_missing_pixels(seg_image)
+                    cv2.imwrite(f"{path}\\{segmentation_file_name}_filled.png", seg_image)
                     output = f'{output_folder}\\{file_name}_skeleton'
                     skeleton, components = vesselanalysis(seg_image, output)
                     output = f'{output_folder}\\{file_name}_overlap.png'
