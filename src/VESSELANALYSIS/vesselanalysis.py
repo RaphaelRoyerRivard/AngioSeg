@@ -369,9 +369,9 @@ def find_ostium(skeleton_distances, bifurcations):
             break
         if len(potential_catheters[0]) == 1 and percent_with_one_possible_catheter < 0:
             percent_with_one_possible_catheter = image_percent
-    if percent_with_two_possible_catheters > 0:
+    if percent_with_two_possible_catheters >= 0:
         percent = percent_with_two_possible_catheters
-    elif percent_with_one_possible_catheter > 0:
+    elif percent_with_one_possible_catheter >= 0:
         percent = percent_with_two_possible_catheters
     else:
         print("Cannot find a possible catheter")
@@ -412,21 +412,21 @@ class CrossingParams:
     """
     This class contains the information necessary to deduce a crossing in the coronary tree skeleton from bifurcations.
     """
-    def __init__(self, regression_model=None, vessel_width=0, maximum_bifurcations=2, crossing_params=None):
+    def __init__(self, angle=0, vessel_width=0, maximum_bifurcations=2, crossing_params=None):
         """
         Constructor of the CrossingParams class.
-        :param regression_model: Regression model computed with sklearn on the pixels of the vessel skeleton (for the slope angle).
+        :param angle: The angle in degrees of the vessel (0 degree is when the vessel points completely towards the right).
         :param vessel_width: Size of the vessel to help with the crossing identification.
         :param maximum_bifurcations: The maximum number of bifurcations to explore before stopping the search.
         :param crossing_params: A CrossingParams object to copy. If set, will ignore the other parameters.
         """
         if crossing_params is None:
-            self.regression_model = regression_model
+            self.angle = angle
             self.vessel_width = vessel_width
             self.maximum_bifurcations = maximum_bifurcations
             self.explored_bifurcations = []
         else:
-            self.regression_model = crossing_params.regression_model
+            self.angle = crossing_params.angle
             self.vessel_width = crossing_params.vessel_width
             self.maximum_bifurcations = crossing_params.maximum_bifurcations
             self.explored_bifurcations = crossing_params.explored_bifurcations.copy()
@@ -460,46 +460,20 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
     ostium_location = None
     while True:
         nodes_in_path += 1
-        patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
-        potential_points = []
-        for y in range(patch.shape[0]):
-            for x in range(patch.shape[1]):
-                if patch[y, x] > 0:  # if pixel is lit up
-                    if x == 1 and y == 1:
-                        continue  # skip current point
-                    if current_node.parent is not None:
-                        if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
-                            continue  # skip parent point
-                        if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
-                            continue  # skip parent's parent point
-                    potential_points.append((x, y))
-
-        is_dead_end = len(potential_points) == 0
-        if not is_dead_end:
-            next_point = potential_points[0]
-            if len(potential_points) > 1:  # there was 2 new pixels next to the current point
-                # we find the closest one (the one that is not in diagonal)
-                # adjacents are: (0,1), (1,0), (1,2), (2,1)
-                # diagonals are: (0,0), (2,0), (0,2), (2,2)
-                for potential_point in potential_points:
-                    if abs(potential_point[0] - potential_point[1]) == 1:
-                        next_point = potential_point
-                        break
-
-            current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
-
         is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
-        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and (is_bifurcation or is_dead_end)))
+        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
         if is_bifurcation or check_for_crossing:
-            # compute linear regression on the last few points to get the vessel angle
-            # TODO use angle from vector instead of linear regression
-            reg, (x, y), vessel_width = get_regression_model_and_vessel_width(current_node, skeleton_distances)
-            print_recursion_log(recursion_level, f"current regression model from {nodes_in_path} nodes {reg.coef_} {reg.intercept_}")
+            # compute the direction vector on the last few points to get the vessel angle
+            vector, points = get_vector_and_points_from_end_node(current_node)
+            previous_angle = float('inf') if crossing_params is None else crossing_params.angle
+            angle = get_angle_from_vector(vector, points, previous_angle, debug=False)
+            vessel_width = get_average_vessel_width(points, skeleton_distances)
+            print_recursion_log(recursion_level, f"computed an angle of {angle} degrees from {nodes_in_path} nodes with vector {vector} and a vessel width of {vessel_width}")
             if check_for_crossing:
-                score = crossing_params.regression_model.score(x, y)
+                angle_diff = abs(angle - crossing_params.angle)
                 vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
-                print_recursion_log(recursion_level, f"original regression model score = {score}, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)")
-                if score > -50 and 0.85 <= vessel_width_ratio <= 1.15:
+                print_recursion_log(recursion_level, f"angle difference of {angle_diff} degrees, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)")
+                if angle_diff <= 20 and vessel_width_ratio <= 1.2:
                     print_recursion_log(recursion_level, "We might have found a crossing!")
                     is_crossing = True
                     crossing_params = None
@@ -526,7 +500,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                         if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
                             print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) of {len(branches)}")
                             if crossing_params is None:
-                                new_crossing_params = CrossingParams(regression_model=reg, vessel_width=vessel_width, maximum_bifurcations=2)
+                                new_crossing_params = CrossingParams(angle=angle, vessel_width=vessel_width, maximum_bifurcations=3)
                             else:
                                 new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
                             new_crossing_params.explored_bifurcations.append(bifurcation)
@@ -541,7 +515,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                             else:
                                 print_recursion_log(recursion_level, "Not a crossing")
                         else:
-                            print_recursion_log(recursion_level, f"branch {b} is the parent")
+                            print_recursion_log(recursion_level, f"branch {b} ({branch_x}, {branch_y}) is the parent")
                 else:
                     if bifurcation in crossing_params.explored_bifurcations:
                         print_recursion_log(recursion_level, f"Bifurcation {bifurcation} already explored")
@@ -550,9 +524,41 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                 print_recursion_log(recursion_level, f"Finished bifurcation {bifurcation}")
                 break  # finished on a bifurcation
 
+        # Find the next potential nodes
+        parent_is_bifurcation = current_node.parent is not None and bifurcations[current_node.parent.y, current_node.parent.x] > 0
+        patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
+        potential_points = []
+        for y in range(patch.shape[0]):
+            for x in range(patch.shape[1]):
+                if patch[y, x] > 0:  # if pixel is lit up
+                    if x == 1 and y == 1:
+                        continue  # skip current point
+                    if current_node.parent is not None:
+                        if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
+                            continue  # skip parent point
+                        if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
+                            continue  # skip parent's parent point
+                        if parent_is_bifurcation and abs(current_node.x + x - 1 - current_node.parent.x) + abs(current_node.y + y - 1 - current_node.parent.y) == 1:
+                            continue  # skip point next to bifurcation parent
+                    potential_points.append((x, y))
+
+        is_dead_end = len(potential_points) == 0
+
         if is_dead_end:
             ends_on_bifurcation = False
             break  # finished on a dead end
+
+        next_point = potential_points[0]
+        if len(potential_points) > 1:  # there was 2 new pixels next to the current point
+            # we find the closest one (the one that is not in diagonal)
+            # adjacents are: (0,1), (1,0), (1,2), (2,1)
+            # diagonals are: (0,0), (2,0), (0,2), (2,2)
+            for potential_point in potential_points:
+                if abs(potential_point[0] - potential_point[1]) == 1:
+                    next_point = potential_point
+                    break
+
+        current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
 
     if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
         nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
@@ -564,29 +570,27 @@ def print_recursion_log(recursion_level, text):
     print(f"{'    ' * recursion_level}{text}")
 
 
-def get_regression_model_and_vessel_width(end_node, skeleton_distances, max_node_count=20, ):
-    """
-    Computes the regression model of the last X points of the vessel's skeleton.
-    :param end_node: Node from which to start backtracking.
-    :param max_node_count: Maximum number of nodes to consider for computing the regression model.
-    :return: The linear regression model and a tuple containing the X and Y values of the samples.
-    """
+def get_vector_and_points_from_end_node(end_node, max_node_count=20):
+    vector = np.array([0, 0])
     points = []
-    backtrack_node = end_node.parent
-    vessel_width = 0
+    backtrack_node = end_node
     while backtrack_node is not None and len(points) < max_node_count:
-        points.append([backtrack_node.x, backtrack_node.y])
-        vessel_width += skeleton_distances[backtrack_node.y, backtrack_node.x]
+        point = np.array([backtrack_node.x, backtrack_node.y])
+        if len(points) > 0:
+            vector += points[-1] - point
+        points.append(point)
         backtrack_node = backtrack_node.parent
+    points = np.array(list(reversed(points)))
+    return vector, points
+
+
+def get_average_vessel_width(points, skeleton_distances):
+    vessel_width = 0
+    for point in points:
+        vessel_width += skeleton_distances[point[1], point[0]]
     if len(points) > 0:
         vessel_width /= len(points)
-    points = np.array(points)
-    x = points[:, np.newaxis, 0]
-    y = -points[:, np.newaxis, 1]
-    # plt.title(f"{len(points)} nodes")
-    # plt.plot(x, y, 'ro')
-    # plt.show()
-    return LinearRegression().fit(x, y), (x, y), vessel_width
+    return vessel_width
 
 
 def get_nodes_and_vessel_width(end_node, skeleton_distances):
