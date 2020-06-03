@@ -361,7 +361,7 @@ def fill_missing_pixels(image):
 def find_ostium(skeleton_distances, bifurcations):
     percent_with_one_possible_catheter = -1
     percent_with_two_possible_catheters = -1
-    for i in range(10):
+    for i in range(15):
         image_percent = int(skeleton_distances.shape[1] * i / 100)
         potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)
         if len(potential_catheters[0]) == 2:
