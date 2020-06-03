@@ -372,7 +372,7 @@ def find_ostium(skeleton_distances, bifurcations):
     if percent_with_two_possible_catheters >= 0:
         percent = percent_with_two_possible_catheters
     elif percent_with_one_possible_catheter >= 0:
-        percent = percent_with_two_possible_catheters
+        percent = percent_with_one_possible_catheter
     else:
         print("Cannot find a possible catheter")
         return None
