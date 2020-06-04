@@ -444,14 +444,15 @@ class CrossingParams:
             return False
         # Invalid if too far
         vector = np.array([bifurcation[1] - self.start_point[1], bifurcation[0] - self.start_point[0]])  # [x, y]
-        print_recursion_log(recursion_level, f"Bifurcation {bifurcation} has a vector {vector}")
-        square_distance = np.square(vector).sum()
-        if square_distance > 100 * 100:
-            print_recursion_log(recursion_level, f"Bifurcation {bifurcation} is too far ({np.sqrt(square_distance)} pixels)")
+        distance = np.sqrt(np.square(vector).sum())
+        print_recursion_log(recursion_level, f"Bifurcation {bifurcation} has a vector {vector} and distance of {distance} pixels")
+        if distance > 100:
+            print_recursion_log(recursion_level, f"Bifurcation {bifurcation} is too far ({distance} pixels)")
             return False
         # Invalid if not in the right direction
         angle = get_angle_from_vector(vector, previous_angle=self.angle)
-        maximum_angle = 45 if square_distance > 3 * 3 else 180
+        maximum_angle = 90 - 45 * distance / 100
+        print_recursion_log(recursion_level, f"Maximum angle = {maximum_angle}")
         if abs(angle - self.angle) > maximum_angle:
             print_recursion_log(recursion_level, f"Bifurcation {bifurcation} is not in the right direction (at {angle} degrees for a {abs(angle - self.angle)} degrees difference)")
             return False
