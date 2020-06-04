@@ -410,26 +410,53 @@ class PathNode:
 
 class CrossingParams:
     """
-    This class contains the information necessary to deduce a crossing in the coronary tree skeleton from bifurcations.
+    This class contains the necessary information to deduce a crossing in the coronary tree skeleton from bifurcations.
     """
-    def __init__(self, angle=0, vessel_width=0, maximum_bifurcations=2, crossing_params=None):
+    def __init__(self, start_point=(0, 0), angle=0.0, vessel_width=0.0, crossing_params=None):
         """
         Constructor of the CrossingParams class.
+        :param start_point: The point (y, x) from which the crossing would start.
         :param angle: The angle in degrees of the vessel (0 degree is when the vessel points completely towards the right).
         :param vessel_width: Size of the vessel to help with the crossing identification.
-        :param maximum_bifurcations: The maximum number of bifurcations to explore before stopping the search.
         :param crossing_params: A CrossingParams object to copy. If set, will ignore the other parameters.
         """
         if crossing_params is None:
+            self.start_point = start_point
             self.angle = angle
             self.vessel_width = vessel_width
-            self.maximum_bifurcations = maximum_bifurcations
             self.explored_bifurcations = []
         else:
+            self.start_point = crossing_params.start_point
             self.angle = crossing_params.angle
             self.vessel_width = crossing_params.vessel_width
-            self.maximum_bifurcations = crossing_params.maximum_bifurcations
             self.explored_bifurcations = crossing_params.explored_bifurcations.copy()
+
+    def is_bifurcation_valid(self, bifurcation, recursion_level):
+        """
+        Checks if a bifurcation is valid for these crossing params depending on the distance and angle of the bifurcation.
+        :param bifurcation: A point (y, x).
+        :param recursion_level: The level of recursion to improve logs readability.
+        :return: True if the bifurcation is within 45 degrees and 100 pixels.
+        """
+        # Invalid if already explored
+        if bifurcation in self.explored_bifurcations:
+            print_recursion_log(recursion_level, f"Bifurcation {bifurcation} already explored")
+            return False
+        # Invalid if too far
+        vector = np.array([bifurcation[1] - self.start_point[1], bifurcation[0] - self.start_point[0]])  # [x, y]
+        print_recursion_log(recursion_level, f"Bifurcation {bifurcation} has a vector {vector}")
+        square_distance = np.square(vector).sum()
+        if square_distance > 100 * 100:
+            print_recursion_log(recursion_level, f"Bifurcation {bifurcation} is too far ({np.sqrt(square_distance)} pixels)")
+            return False
+        # Invalid if not in the right direction
+        angle = get_angle_from_vector(vector, previous_angle=self.angle)
+        maximum_angle = 45 if square_distance > 3 * 3 else 180
+        if abs(angle - self.angle) > maximum_angle:
+            print_recursion_log(recursion_level, f"Bifurcation {bifurcation} is not in the right direction (at {angle} degrees for a {abs(angle - self.angle)} degrees difference)")
+            return False
+        # Valid otherwise
+        return True
 
 
 def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ostium=False, parent=None, crossing_params=None, recursion_level=0):
@@ -466,7 +493,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
             # compute the direction vector on the last few points to get the vessel angle
             vector, points = get_vector_and_points_from_end_node(current_node)
             previous_angle = float('inf') if crossing_params is None else crossing_params.angle
-            angle = get_angle_from_vector(vector, points, previous_angle, debug=False)
+            angle = get_angle_from_vector(vector, previous_angle, debug=False)
             vessel_width = get_average_vessel_width(points, skeleton_distances)
             print_recursion_log(recursion_level, f"computed an angle of {angle} degrees from {nodes_in_path} nodes with vector {vector} and a vessel width of {vessel_width}")
             if check_for_crossing:
@@ -479,7 +506,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                     crossing_params = None
             if is_bifurcation:
                 bifurcation = (current_node.y, current_node.x)
-                if crossing_params is None or (bifurcation not in crossing_params.explored_bifurcations and len(crossing_params.explored_bifurcations) < crossing_params.maximum_bifurcations):
+                if crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, recursion_level):
                     if search_for_ostium and crossing_params is None:
                         nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
                         sharp_angle_location = get_location_of_sharp_angle(nodes)
@@ -500,7 +527,7 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                         if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
                             print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) of {len(branches)}")
                             if crossing_params is None:
-                                new_crossing_params = CrossingParams(angle=angle, vessel_width=vessel_width, maximum_bifurcations=3)
+                                new_crossing_params = CrossingParams(start_point=(current_node.y, current_node.x), angle=angle, vessel_width=vessel_width)
                             else:
                                 new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
                             new_crossing_params.explored_bifurcations.append(bifurcation)
@@ -516,11 +543,6 @@ def follow_path(skeleton_distances, bifurcations, starting_point, search_for_ost
                                 print_recursion_log(recursion_level, "Not a crossing")
                         else:
                             print_recursion_log(recursion_level, f"branch {b} ({branch_x}, {branch_y}) is the parent")
-                else:
-                    if bifurcation in crossing_params.explored_bifurcations:
-                        print_recursion_log(recursion_level, f"Bifurcation {bifurcation} already explored")
-                    else:
-                        print_recursion_log(recursion_level, f"Maximum bifurcation count has been reached")
                 print_recursion_log(recursion_level, f"Finished bifurcation {bifurcation}")
                 break  # finished on a bifurcation
 
@@ -649,7 +671,7 @@ def get_location_of_sharp_angle(nodes):
         diff_vectors = np.array(diff_vectors)
         sumed_vector = np.sum(diff_vectors, axis=0)
         previous_angle = float('inf') if len(angles) == 0 else angles[-1]
-        angle = get_angle_from_vector(sumed_vector, points, previous_angle)
+        angle = get_angle_from_vector(sumed_vector, previous_angle)
         angles.append(angle)
         # print(i-VECTOR_PIXEL_COUNT+1, "angle:", angle)
 
@@ -689,44 +711,8 @@ def get_location_of_sharp_angle(nodes):
     return None
 
 
-def get_angle_from_vector(vector, points, previous_angle=float('inf'), debug=False):
+def get_angle_from_vector(vector, previous_angle=float('inf'), debug=False):
     angle = math.degrees(math.atan2(vector[1], vector[0]))
-    if points[0, 1] < points[-1, 1]:  # vessel is going up
-        if angle < 0:
-            if debug:
-                print("Going up, adding 180")
-            angle += 180
-        elif angle == 0:
-            if debug:
-                print("Bug with linear regression, setting to 90")
-            angle = 90
-    elif points[0, 1] > points[-1, 1]:  # vessel is going down
-        if angle > 0:
-            if debug:
-                print("Going down, subtracting 180")
-            angle -= 180
-        elif angle == 0:
-            if debug:
-                print("Bug with linear regression, setting to -90")
-            angle = -90
-    if points[0, 0] < points[-1, 0]:  # vessel is going right
-        if angle > 90:
-            if debug:
-                print("Going right, subtracting 180")
-            angle -= 180
-        elif angle < -90:
-            if debug:
-                print("Going right, adding 180")
-            angle += 180
-    elif points[0, 0] > points[-1, 0]:  # vessel is going left
-        if abs(angle) < 90:
-            if angle > 0:
-                if debug:
-                    print("Going left, subtracting 180")
-                angle -= 180
-            else:
-                print("Going left, adding 180")
-                angle += 180
     angle_diff = angle if previous_angle == float('inf') else angle - previous_angle
     if angle_diff > 180:
         if debug:
