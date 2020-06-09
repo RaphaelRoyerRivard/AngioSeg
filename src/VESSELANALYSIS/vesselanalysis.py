@@ -390,17 +390,12 @@ def find_ostium(skeleton_distances, bifurcations):
         else:  # No valid points to do the pathing
             print(f"No valid points to do the pathing for ({pixel_x}, {percent})")
             continue
-        # start_time = time.time()
-        # nodes, vessel_width, _, ends_on_bifurcation, ostium_location = follow_path_dfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent))
-        # print(f"dfs took {time.time() - start_time}s")
-        # start_time = time.time()
+        start_time = time.time()
         ostium_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent))
-        # print(f"bfs took {time.time() - start_time}s")
+        print(f"follow_path_bfs took {time.time() - start_time}s")
         if ostium_location is not None:
             print("ostium:", ostium_location)
             return ostium_location
-        # if ends_on_bifurcation:
-        #     return nodes[-1].x, nodes[-1].y
 
     return None
 
@@ -417,27 +412,27 @@ class CrossingParams:
     """
     This class contains the necessary information to deduce a crossing in the coronary tree skeleton from bifurcations.
     """
-    def __init__(self, start_point=(0, 0), angle=0.0, vessel_width=0.0, crossing_params=None):
+    def __init__(self, bifurcation_node=None, angle=0.0, vessel_width=0.0, crossing_params=None):
         """
         Constructor of the CrossingParams class.
-        :param start_point: The point (y, x) from which the crossing would start.
+        :param bifurcation_node: The node from which the crossing would start.
         :param angle: The angle in degrees of the vessel (0 degree is when the vessel points completely towards the right).
         :param vessel_width: Size of the vessel to help with the crossing identification.
         :param crossing_params: A CrossingParams object to copy. If set, will ignore the other parameters.
         """
         if crossing_params is None:
-            self.start_point = start_point
+            self.bifurcation_node = bifurcation_node
             self.angle = angle
             self.vessel_width = vessel_width
             self.explored_bifurcations = []
         else:
-            self.start_point = crossing_params.start_point
+            self.bifurcation_node = crossing_params.bifurcation_node
             self.angle = crossing_params.angle
             self.vessel_width = crossing_params.vessel_width
             self.explored_bifurcations = crossing_params.explored_bifurcations.copy()
 
     def get_distance_and_angle_diff(self, bifurcation):
-        vector = np.array([bifurcation[1] - self.start_point[1], bifurcation[0] - self.start_point[0]])  # [x, y]
+        vector = np.array([bifurcation[1] - self.bifurcation_node.x, bifurcation[0] - self.bifurcation_node.y])  # [x, y]
         distance = np.sqrt(np.square(vector).sum())
         angle = get_angle_from_vector(vector, previous_angle=self.angle)
         angle_diff = abs(angle - self.angle)
@@ -455,7 +450,7 @@ class CrossingParams:
             print_recursion_log(recursion_level, f"Bifurcation {bifurcation} already explored")
             return False
         # Invalid if too far
-        vector = np.array([bifurcation[1] - self.start_point[1], bifurcation[0] - self.start_point[0]])  # [x, y]
+        vector = np.array([bifurcation[1] - self.bifurcation_node.x, bifurcation[0] - self.bifurcation_node.y])  # [x, y]
         distance = np.sqrt(np.square(vector).sum())
         print_recursion_log(recursion_level, f"Bifurcation {bifurcation} has a vector {vector} and distance of {distance} pixels")
         if distance > 100:
@@ -472,153 +467,29 @@ class CrossingParams:
         return True
 
 
-def follow_path_dfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=False, parent=None, crossing_params=None, recursion_level=0):
+def follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=False, search_for_crossing=False, parent=None):
     """
     Follows a path on the skeleton until it reaches a sudden change in width or a bifurcation.
     :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
     :param bifurcations: A 2D ndarray containing the points of bifurcations on the skeleton.
     :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
-    :param search_for_ostium: A bool representing if we are searching for the ostium (by analysing the vessel width and .
+    :param search_for_ostium: A bool representing if we are searching for the ostium (by analysing the vessel width and angle).
+    :param search_for_crossing: A bool representing if we are searching for a crossing (will stop as soon as the first crossing is found).
     :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
     It basically allows the algorithm to know in what direction to start pathing.
-    :param crossing_params: CrossingParams object containing the necessary information to find the continuity of a vessel that hit a bifurcation.
-    :param recursion_level: Integer used for increasing the readability of the logs.
-    :return: Returns multiple variables:
-      - A list of nodes representing the path taken
-      - The vessel width along the path
-      - A bool representing if the segment is a continuity of a previous one (when crossing_params is provided)
-      - A bool representing if the segment ended on a bifurcation
-      - The location of the ostium if found
-    """
-    nodes_in_path = 0
-    nodes = []
-    vessel_width = 0
-    parent_node = None if parent is None else PathNode(parent[0], parent[1])
-    current_node = PathNode(starting_point[0], starting_point[1], parent_node)
-    is_crossing = False
-    ends_on_bifurcation = True
-    ostium_location = None
-    while True:
-        nodes_in_path += 1
-        is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
-        check_for_crossing = crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
-        if is_bifurcation or check_for_crossing:
-            # compute the direction vector on the last few points to get the vessel angle
-            vector, points = get_vector_and_points_from_end_node(current_node)
-            previous_angle = float('inf') if crossing_params is None else crossing_params.angle
-            angle = get_angle_from_vector(vector, previous_angle, debug=False)
-            vessel_width = get_average_vessel_width(points, skeleton_distances)
-            print_recursion_log(recursion_level, f"computed an angle of {angle} degrees from {nodes_in_path} nodes with vector {vector} and a vessel width of {vessel_width}")
-            if check_for_crossing:
-                angle_diff = abs(angle - crossing_params.angle)
-                vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
-                print_recursion_log(recursion_level, f"angle difference of {angle_diff} degrees, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)")
-                if angle_diff <= 20 and vessel_width_ratio <= 1.2:
-                    print_recursion_log(recursion_level, "We might have found a crossing!")
-                    is_crossing = True
-                    crossing_params = None
-            if is_bifurcation:
-                bifurcation = (current_node.y, current_node.x)
-                if crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, recursion_level):
-                    if search_for_ostium and crossing_params is None:
-                        nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
-                        sharp_angle_location = get_location_of_sharp_angle(nodes)
-                        if sharp_angle_location is not None:
-                            print_recursion_log(recursion_level, f"sharp angle location: {sharp_angle_location}")
-                            ostium_location = sharp_angle_location
-                            break
-                        widening_location = get_location_of_widening(nodes, vessel_widths)
-                        if widening_location is not None:
-                            print_recursion_log(recursion_level, f"widening location: {widening_location}")
-                            ostium_location = widening_location
-                            break
-                    print_recursion_log(recursion_level, f"exploring bifurcation {bifurcation}")
-                    # start a new path following on branches
-                    _, branches = detect_bifurcation((current_node.y, current_node.x), skeleton_distances)
-                    for b, (branch_y, branch_x) in enumerate(branches):
-                        branch_point = (current_node.x + branch_x, current_node.y + branch_y)
-                        if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
-                            print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) of {len(branches)}")
-                            if crossing_params is None:
-                                new_crossing_params = CrossingParams(start_point=(current_node.y, current_node.x), angle=angle, vessel_width=vessel_width)
-                            else:
-                                new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
-                            new_crossing_params.explored_bifurcations.append(bifurcation)
-                            branch_nodes, branch_vessel_width, crossing, ends_on_bifurcation, ostium_location = follow_path_dfs(skeleton_distances, bifurcations, branch_point, search_for_ostium=search_for_ostium, parent=(current_node.x, current_node.y), crossing_params=new_crossing_params, recursion_level=recursion_level + 1)
-                            if crossing:
-                                print_recursion_log(recursion_level, "The crossing was found, no need to check the other branches")
-                                print_recursion_log(recursion_level, f"Branch has {len(branch_nodes)} nodes")
-                                nodes = branch_nodes
-                                vessel_width = branch_vessel_width
-                                is_crossing = True
-                                break
-                            else:
-                                print_recursion_log(recursion_level, "Not a crossing")
-                        else:
-                            print_recursion_log(recursion_level, f"branch {b} ({branch_x}, {branch_y}) is the parent")
-                print_recursion_log(recursion_level, f"Finished bifurcation {bifurcation}")
-                break  # finished on a bifurcation
-
-        # Find the next potential nodes
-        parent_is_bifurcation = current_node.parent is not None and bifurcations[current_node.parent.y, current_node.parent.x] > 0
-        patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
-        potential_points = []
-        for y in range(patch.shape[0]):
-            for x in range(patch.shape[1]):
-                if patch[y, x] > 0:  # if pixel is lit up
-                    if x == 1 and y == 1:
-                        continue  # skip current point
-                    if current_node.parent is not None:
-                        if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
-                            continue  # skip parent point
-                        if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
-                            continue  # skip parent's parent point
-                        if parent_is_bifurcation and abs(current_node.x + x - 1 - current_node.parent.x) + abs(current_node.y + y - 1 - current_node.parent.y) == 1:
-                            continue  # skip point next to bifurcation parent
-                    potential_points.append((x, y))
-
-        is_dead_end = len(potential_points) == 0
-
-        if is_dead_end:
-            ends_on_bifurcation = False
-            break  # finished on a dead end
-
-        next_point = potential_points[0]
-        if len(potential_points) > 1:  # there was 2 new pixels next to the current point
-            # we find the closest one (the one that is not in diagonal)
-            # adjacents are: (0,1), (1,0), (1,2), (2,1)
-            # diagonals are: (0,0), (2,0), (0,2), (2,2)
-            for potential_point in potential_points:
-                if abs(potential_point[0] - potential_point[1]) == 1:
-                    next_point = potential_point
-                    break
-
-        current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
-
-    if len(nodes) == 0:  # Otherwise it means we found a crossing and we should return the values from that branch
-        nodes, vessel_width = get_nodes_and_vessel_width(current_node, skeleton_distances)
-    print_recursion_log(recursion_level, f"Returning {len(nodes)} nodes, crossing: {is_crossing}, ends on bifurcation: {ends_on_bifurcation}, ostium location: {ostium_location}")
-    return nodes, vessel_width, is_crossing, ends_on_bifurcation, ostium_location
-
-
-def follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=False, parent=None):
-    """
-    Follows a path on the skeleton until it reaches a sudden change in width or a bifurcation.
-    :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
-    :param bifurcations: A 2D ndarray containing the points of bifurcations on the skeleton.
-    :param starting_point: A tuple of indices (x, y) representing the position in the skeleton on which we want to start pathing.
-    :param search_for_ostium: A bool representing if we are searching for the ostium (by analysing the vessel width and .
-    :param parent: A tuple of indices (x, y) representing the position in the skeleton from which the starting point was chosen.
-    It basically allows the algorithm to know in what direction to start pathing.
-    :return: Returns the location of the ostium if found, otherwise None.
+    :return: The return value is different depending on the parameters.
+    If search_for_ostium is True, returns the location of the ostium if found, otherwise None.
+    If search_for_crossing is True, returns True if the first bifurcation encountered is a crossing, otherwise False.
     """
     parent_node = None if parent is None else PathNode(parent[0], parent[1])
     current_node = PathNode(starting_point[0], starting_point[1], parent_node)
     paths_to_explore = []
-    heapq.heappush(paths_to_explore, (0, 0, current_node, None))  # push items to the priority queue by adding a priority + tie breaker and crossing params alongside the node
-    ostium_location = None
+    crossing_params = None
+    heapq.heappush(paths_to_explore, (0, 0, current_node, crossing_params))  # push items to the priority queue by adding a priority + tie breaker and crossing params alongside the node
+    explored_bifurcations = []
     while len(paths_to_explore) > 0:
-        priority, branch_number, current_node, crossing_params = paths_to_explore.pop()
+        print(paths_to_explore)
+        priority, branch_number, current_node, crossing_params = heapq.heappop(paths_to_explore)
         print_recursion_log(0 if crossing_params is None else 1, f"-> Popping node ({current_node.x}, {current_node.y}) of priority {priority} and branch number {branch_number}, {len(paths_to_explore)} remaining")
         nodes_in_path = 0
         while True:
@@ -637,87 +508,146 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for
                     angle_diff = abs(angle - crossing_params.angle)
                     vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
                     print_recursion_log(recursion_level, f"angle difference of {angle_diff} degrees, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)")
-                    if angle_diff <= 20 and vessel_width_ratio <= 1.2:
-                        print_recursion_log(recursion_level, "We have found a crossing, now clearing the priority queue")
-                        crossing_params = None
+                    if angle_diff <= 20 and vessel_width_ratio <= 1.35:
+                        is_crossing = True
+                        # If the crossing was identified on the first bifurcation, it is likely not a crossing. We need to check if we can find a crossing on the other branch first.
+                        if len(crossing_params.explored_bifurcations) > 1:
+                            print_recursion_log(recursion_level, "We have found a crossing, now clearing the priority queue")
+                        else:
+                            print_recursion_log(recursion_level, "We would have found a crossing, but it is the first bifurcation... Now searching for a crossing from the other bifurcation branch.")
+                            # Backtracking to the bifurcation we think might be a crossing
+                            backtrack_node = current_node.parent
+                            previous_node = current_node
+                            while bifurcations[backtrack_node.y, backtrack_node.x] == 0:
+                                previous_node = backtrack_node
+                                backtrack_node = backtrack_node.parent
+                            bifurcation = (backtrack_node.y, backtrack_node.x)
+                            # Get the branches and find the one that was not taken
+                            _, branches = detect_bifurcation(bifurcation, skeleton_distances)
+                            for b, (branch_y, branch_x) in enumerate(branches):
+                                branch_point = (bifurcation[1] + branch_x, bifurcation[0] + branch_y)
+                                if branch_point[0] == previous_node.x and branch_point[1] == previous_node.y:
+                                    continue  # Skip the current branch
+                                if branch_point[0] == crossing_params.bifurcation_node.parent.x and branch_point[1] == crossing_params.bifurcation_node.parent.y:
+                                    continue  # Skip the parent branch
+                                # The remaining branch is the branch of the vessel that we want to check if it crosses the one we just followed
+                                # We now follow it to its extremity and starts the path following towards the bifurcation we want to identify as a crossing or bifurcation
+                                branch_node = PathNode(branch_point[0], branch_point[1], parent=backtrack_node)
+                                while bifurcations[branch_node.y, branch_node.x] == 0:
+                                    next_point = get_next_path_point(branch_node, skeleton_distances)
+                                    if next_point is None:
+                                        break
+                                    branch_node = PathNode(branch_node.x + next_point[0] - 1, branch_node.y + next_point[1] - 1, parent=branch_node)
+                                # Check if the vessel has a crossing
+                                is_crossing = follow_path_bfs(skeleton_distances, bifurcations, starting_point=(branch_node.parent.x, branch_node.parent.y), search_for_crossing=True, parent=(branch_node.x, branch_node.y))
+                                print_recursion_log(recursion_level, f"Is first the bifurcation a crossing? {is_crossing}")
+                        if is_crossing:
+                            if search_for_crossing:
+                                return True
+                            crossing_params = None
+                        else:
+                            # We followed the other branch of the bifurcation and found no crossing, so we need to stop looking
+                            is_bifurcation = True
+                            crossing_params.explored_bifurcations.append((current_node.y, current_node.x))
                         paths_to_explore.clear()
                 if is_bifurcation:
                     bifurcation = (current_node.y, current_node.x)
-                    if crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, recursion_level):
-                        if search_for_ostium and crossing_params is None:
-                            nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
-                            sharp_angle_location = get_location_of_sharp_angle(nodes)
-                            if sharp_angle_location is not None:
-                                print_recursion_log(recursion_level, f"sharp angle location: {sharp_angle_location}")
-                                ostium_location = sharp_angle_location
-                                break
-                            widening_location = get_location_of_widening(nodes, vessel_widths)
-                            if widening_location is not None:
-                                print_recursion_log(recursion_level, f"widening location: {widening_location}")
-                                ostium_location = widening_location
-                                break
-                        bifurcation_node = PathNode(bifurcation[1], bifurcation[0])
-                        # add bifurcation branches to the priority queue
-                        _, branches = detect_bifurcation(bifurcation, skeleton_distances)
-                        print_recursion_log(recursion_level, f"Adding branches of bifurcation {bifurcation}")
-                        for b, (branch_y, branch_x) in enumerate(branches):
-                            branch_point = (current_node.x + branch_x, current_node.y + branch_y)
-                            if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
-                                if crossing_params is None:
-                                    new_crossing_params = CrossingParams(start_point=(current_node.y, current_node.x), angle=angle, vessel_width=vessel_width)
-                                    priority = 0
+                    if bifurcation not in explored_bifurcations:
+                        explored_bifurcations.append(bifurcation)
+                        if crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, recursion_level):
+                            if search_for_ostium and crossing_params is None:
+                                nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
+                                sharp_angle_location = get_location_of_sharp_angle(nodes)
+                                if sharp_angle_location is not None:
+                                    print_recursion_log(recursion_level, f"sharp angle location: {sharp_angle_location}")
+                                    return sharp_angle_location
+                                widening_location = get_location_of_widening(nodes, vessel_widths)
+                                if widening_location is not None:
+                                    print_recursion_log(recursion_level, f"widening location: {widening_location}")
+                                    return widening_location
+                            bifurcation_node = PathNode(bifurcation[1], bifurcation[0])
+                            # add bifurcation branches to the priority queue
+                            _, branches = detect_bifurcation(bifurcation, skeleton_distances)
+                            print_recursion_log(recursion_level, f"Adding branches of bifurcation {bifurcation}")
+                            for b, (branch_y, branch_x) in enumerate(branches):
+                                branch_point = (current_node.x + branch_x, current_node.y + branch_y)
+                                if branch_point[0] != current_node.parent.x or branch_point[1] != current_node.parent.y:
+                                    if crossing_params is None:
+                                        new_crossing_params = CrossingParams(bifurcation_node=current_node, angle=angle, vessel_width=vessel_width)
+                                        priority = 0
+                                    else:
+                                        new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
+                                        distance, angle_diff = new_crossing_params.get_distance_and_angle_diff(bifurcation)
+                                        priority = distance * angle_diff
+                                    print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) with priority {priority}")
+                                    new_crossing_params.explored_bifurcations.append(bifurcation)
+                                    new_node = PathNode(branch_point[0], branch_point[1], parent=bifurcation_node)
+                                    heapq.heappush(paths_to_explore, (priority, b, new_node, new_crossing_params))
                                 else:
-                                    new_crossing_params = CrossingParams(crossing_params=crossing_params)  # Copy
-                                    distance, angle_diff = new_crossing_params.get_distance_and_angle_diff(bifurcation)
-                                    priority = distance * angle_diff
-                                print_recursion_log(recursion_level, f"new branch {b} ({branch_x}, {branch_y}) with priority {priority}")
-                                new_crossing_params.explored_bifurcations.append(bifurcation)
-                                new_node = PathNode(branch_point[0], branch_point[1], parent=bifurcation_node)
-                                heapq.heappush(paths_to_explore, (priority, b, new_node, new_crossing_params))
-                            else:
-                                print_recursion_log(recursion_level, f"branch {b} ({branch_x}, {branch_y}) is the parent")
+                                    print_recursion_log(recursion_level, f"branch {b} ({branch_x}, {branch_y}) is the parent")
+                    else:
+                        print_recursion_log(recursion_level, f"bifurcation {bifurcation} has already been explored")
                     break  # finished on a bifurcation
 
-            # Find the next potential nodes
-            parent_is_bifurcation = current_node.parent is not None and bifurcations[current_node.parent.y, current_node.parent.x] > 0
-            patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
-            potential_points = []
-            for y in range(patch.shape[0]):
-                for x in range(patch.shape[1]):
-                    if patch[y, x] > 0:  # if pixel is lit up
-                        if x == 1 and y == 1:
-                            continue  # skip current point
-                        if current_node.parent is not None:
-                            if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
-                                continue  # skip parent point
-                            if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
-                                continue  # skip parent's parent point
-                            if parent_is_bifurcation and abs(current_node.x + x - 1 - current_node.parent.x) + abs(current_node.y + y - 1 - current_node.parent.y) == 1:
-                                continue  # skip point next to bifurcation parent
-                        potential_points.append((x, y))
+            next_point = get_next_path_point(current_node, skeleton_distances)
 
-            is_dead_end = len(potential_points) == 0
-
-            if is_dead_end:
+            if next_point is None:
                 print_recursion_log(recursion_level, f"Dead end")
                 break  # finished on a dead end
 
-            next_point = potential_points[0]
-            if len(potential_points) > 1:  # there was 2 new pixels next to the current point
-                # we find the closest one (the one that is not in diagonal)
-                # adjacents are: (0,1), (1,0), (1,2), (2,1)
-                # diagonals are: (0,0), (2,0), (0,2), (2,2)
-                for potential_point in potential_points:
-                    if abs(potential_point[0] - potential_point[1]) == 1:
-                        next_point = potential_point
-                        break
-
             current_node = PathNode(current_node.x + next_point[0] - 1, current_node.y + next_point[1] - 1, current_node)
 
-        if search_for_ostium and ostium_location is not None:
-            break
+    if search_for_ostium:
+        if crossing_params is not None:
+            # We haven't found a crossing for a bifurcation. We then suppose the ostium is that bifurcation.
+            return crossing_params.bifurcation_node.x, crossing_params.bifurcation_node.y
+        return None
 
-    return ostium_location
+    if search_for_crossing:
+        return False
+
+    return None
+
+
+def get_next_path_point(current_node, skeleton_distances):
+    """
+    Searches for the points around the current node for the next point in the path.
+    :param current_node: The current node of the path finding.
+    :param skeleton_distances: The skeleton 2D array with distances.
+    :return: A point (x, y) in local space (where 0 <= x <= 2, same for y) indicating where the next point in path is compared to the current point.
+    """
+    # Find the next potential nodes
+    parent_is_bifurcation = current_node.parent is not None and bifurcations[current_node.parent.y, current_node.parent.x] > 0
+    patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
+    potential_points = []
+    for y in range(patch.shape[0]):
+        for x in range(patch.shape[1]):
+            if patch[y, x] > 0:  # if pixel is lit up
+                if x == 1 and y == 1:
+                    continue  # skip current point
+                if current_node.parent is not None:
+                    if current_node.x + x - 1 == current_node.parent.x and current_node.y + y - 1 == current_node.parent.y:
+                        continue  # skip parent point
+                    if current_node.parent.parent is not None and current_node.x + x - 1 == current_node.parent.parent.x and current_node.y + y - 1 == current_node.parent.parent.y:
+                        continue  # skip parent's parent point
+                    if parent_is_bifurcation and abs(current_node.x + x - 1 - current_node.parent.x) + abs(current_node.y + y - 1 - current_node.parent.y) == 1:
+                        continue  # skip point next to bifurcation parent
+                potential_points.append((x, y))
+
+    if len(potential_points) == 0:
+        return None
+
+    next_point = potential_points[0]
+    if len(potential_points) > 1:  # there was 2 new pixels next to the current point
+        # we find the closest one (the one that is not in diagonal)
+        # adjacents are: (0,1), (1,0), (1,2), (2,1)
+        # diagonals are: (0,0), (2,0), (0,2), (2,2)
+        for potential_point in potential_points:
+            if abs(potential_point[0] - potential_point[1]) == 1:
+                next_point = potential_point
+                break
+
+    return next_point
 
 
 def print_recursion_log(recursion_level, text):
@@ -739,12 +669,20 @@ def get_vector_and_points_from_end_node(end_node, max_node_count=20):
 
 
 def get_average_vessel_width(points, skeleton_distances):
-    vessel_width = 0
+    """
+    Returns the vessel width that is calculated from the 25th percentile of the skeleton distances of the points.
+    :param points: The pixels of the vessel.
+    :param skeleton_distances: The skeleton distances.
+    :return: 25th percentile of vessel width.
+    """
+    if len(points) == 0:
+        return 0
+    vessel_widths = []
     for point in points:
-        vessel_width += skeleton_distances[point[1], point[0]]
-    if len(points) > 0:
-        vessel_width /= len(points)
-    return vessel_width
+        vessel_widths.append(skeleton_distances[point[1], point[0]])
+    vessel_widths = sorted(vessel_widths)
+    quarter = round(len(points) / 4)
+    return vessel_widths[quarter]
 
 
 def get_nodes_and_vessel_width(end_node, skeleton_distances):
@@ -842,7 +780,7 @@ def get_location_of_sharp_angle(nodes, show_graph=False):
         print(end-start, "pixels long")
         if end - start <= 25:
             node = nodes[degrees_gradient.argmax() + int(VECTOR_PIXEL_COUNT/2)]
-            return [node.x, node.y]
+            return node.x, node.y
     return None
 
 
