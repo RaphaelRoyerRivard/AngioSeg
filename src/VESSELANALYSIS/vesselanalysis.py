@@ -9,7 +9,6 @@ import sys, getopt
 import cv2
 import ctypes
 from ctypes import *
-import numpy as np
 import cv2
 import os.path
 import math
@@ -20,6 +19,7 @@ import time
 from skimage.morphology import skeletonize, medial_axis
 from scipy.ndimage import gaussian_filter1d
 import heapq
+import operator
 
 _DIRNAME = os.path.dirname(__file__)
 toolsdll=cdll.LoadLibrary(os.path.join(_DIRNAME,'VesselAnalysis/x64/Release/VesselAnalysis.dll'))
@@ -369,14 +369,25 @@ def find_ostium(skeleton_distances, bifurcations):
     """
     percent_with_one_possible_catheter = -1
     percent_with_two_possible_catheters = -1
-    for i in range(15):
+    potential_catheters = None
+    for i in range(50):
         image_percent = int(skeleton_distances.shape[1] * i / 100)
-        potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)
-        if len(potential_catheters[0]) == 2:
+        current_potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)
+        if len(current_potential_catheters[0]) > 1:
             percent_with_two_possible_catheters = image_percent
+            if len(current_potential_catheters[0]) > 2:
+                potential_catheters_width = {}
+                for potential_catheter_x in current_potential_catheters[0]:
+                    potential_catheters_width[potential_catheter_x] = skeleton_distances[image_percent, potential_catheter_x]
+                potential_catheters_width = sorted(potential_catheters_width.items(), key=operator.itemgetter(1), reverse=True)
+                potential_catheters = potential_catheters_width[0:2]
+                potential_catheters = [t[0] for t in potential_catheters]
+            else:
+                potential_catheters = current_potential_catheters[0]
             break
-        if len(potential_catheters[0]) == 1 and percent_with_one_possible_catheter < 0:
+        if len(current_potential_catheters[0]) == 1 and percent_with_one_possible_catheter < 0:
             percent_with_one_possible_catheter = image_percent
+            potential_catheters = current_potential_catheters[0]
     if percent_with_two_possible_catheters >= 0:
         percent = percent_with_two_possible_catheters
     elif percent_with_one_possible_catheter >= 0:
@@ -385,15 +396,14 @@ def find_ostium(skeleton_distances, bifurcations):
         print("Cannot find a possible catheter")
         return None, None
 
-    potential_catheters = np.where(skeleton_distances[percent, :] > 0)
-    print("potential catheters", potential_catheters[0])
+    print("potential catheters", potential_catheters)
     # Do the search twice. The first time it will search normally, the second time it will try to find the closest skeleton point from the dead end
     for i in range(2):
         if i == 1:
             print("\nCould not find the ostium connected to the catheter, now trying to find a disconnected catheter to deduce the ostium position")
         catheter_points = []
         catheter_tips = []
-        for pixel_x in potential_catheters[0]:
+        for pixel_x in potential_catheters:
             print(f"\nTrying for pontential catheter at ({pixel_x}, {percent})")
             if skeleton_distances[percent+1, pixel_x] > 0:  # Bottom
                 starting_point = (pixel_x, percent+1)
@@ -407,7 +417,7 @@ def find_ostium(skeleton_distances, bifurcations):
             if i == 0:
                 # Normal search for ostium
                 start_time = time.time()
-                ostium_location, parent_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=False)
+                ostium_location, parent_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=True)
                 print(f"follow_path_bfs took {time.time() - start_time}s")
                 if ostium_location is not None:
                     print("ostium:", ostium_location, "parent:", parent_location)
@@ -1090,18 +1100,23 @@ if __name__ == '__main__':
     
     To find the ostium based on a segmentation file, use these command line parameters:
     python src/VESSELANALYSIS/vesselanalysis.py --input [file]
+    
+    To evaluate the ostium detection on all segmented files, use these command line parameters:
+    python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --file_type tif --evaluate True
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', default='.', help='input file or folder in which to search recursively for images of segmented frames to skeletonize')
     parser.add_argument('--file_type', default='png', help='type of images to skeletonize (png, jpg, tif, etc)')
     parser.add_argument('--contains', default='', help='filters out files that do not contain that string (i.e. "_seg")')
     parser.add_argument('--visualize', default=False, help='mode where it saves overlapped images of the skeleton over the original image')
+    parser.add_argument('--evaluate', default=False, help='mode where the ostium detection is compared with the ground truth for all images')
     args = parser.parse_args()
 
     input_path = args.input
     file_type = args.file_type
     contains = args.contains
     visualize = args.visualize
+    evaluate = args.evaluate
 
     if os.path.isfile(input_path):
         print("Input is a file")
@@ -1123,19 +1138,11 @@ if __name__ == '__main__':
         plt.show()
     else:
         print("Input is a folder")
+        evaluation_results = {}  # folder: distance
         for path, subfolders, files in os.walk(input_path):
             print(path)
 
-            if visualize:
-                # if "segmented" not in subfolders:
-                #     continue
-                # output_folder = f'{path}\\segmented\\overlapped'
-                output_folder = f'{path}'
-            else:
-                # if path.split("\\")[-1] != "segmented":
-                #     continue
-                # output_folder = f'{path}\\skeletonized'
-                output_folder = f'{path}'
+            output_folder = f'{path}'
 
             for file in files:
                 image_type = f".{file_type}"
@@ -1149,6 +1156,9 @@ if __name__ == '__main__':
                     os.mkdir(output_folder)
 
                 if visualize and "_seg" in file:
+                    continue
+
+                if evaluate and "_seg" not in file:
                     continue
 
                 image_path = f'{path}\\{file}'
@@ -1171,6 +1181,25 @@ if __name__ == '__main__':
                     skeleton, components = vesselanalysis(seg_image, output)
                     output = f'{output_folder}\\{file_name}_overlap.png'
                     overlap(image, seg_image, skeleton, components, output)
+
+                elif evaluate:
+                    file_name = file.split("_seg")[0]
+                    fill_missing_pixels(image)
+                    skeleton, bifurcations = vesselanalysis(image, f"{output_folder}\\{file_name}_skeleton")
+                    ostium, ostium_parent = find_ostium(skeleton, bifurcations)
+                    if ostium is not None:
+                        ostium_gt_file_name = f"{file_name}_ostium.txt"
+                        f = open(f"{path}\\{ostium_gt_file_name}", 'r')
+                        ostium_gt = f.readline().split(" ")
+                        ostium_gt = (int(ostium_gt[0]), int(ostium_gt[1]))
+                        distance = np.sqrt((ostium[0] - ostium_gt[0]) ** 2 + (ostium[1] - ostium_gt[1]) ** 2)
+                        max_distance = np.sqrt(image.shape[0] ** 2 + image.shape[1] ** 2)
+                        relative_distance = distance / max_distance
+                        print(f"distance: {int(round(distance))}px or {int(relative_distance * 1000) / 10}%")
+                        evaluation_results[file_name] = distance
+                    else:
+                        evaluation_results[file_name] = float('inf')
+
                 else:
                     fill_missing_pixels(image)
                     # file_name = file.split("segmented")[0]
@@ -1178,3 +1207,7 @@ if __name__ == '__main__':
                     output = f'{output_folder}\\{file_name}skeletonized'
                     cv2.imwrite(f'{output_folder}\\{file_name}seg_filled.png', image)
                     vesselanalysis(image, output)
+
+        if evaluate:
+            evaluation_results = sorted(evaluation_results.items(), key=operator.itemgetter(1))
+            print(evaluation_results)
