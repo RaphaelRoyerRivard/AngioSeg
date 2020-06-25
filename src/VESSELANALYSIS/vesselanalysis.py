@@ -371,23 +371,33 @@ def find_ostium(skeleton_distances, bifurcations):
     percent_with_two_possible_catheters = -1
     potential_catheters = None
     for i in range(50):
+        if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 2:
+            break  # do not check too far after we found the first catheter
         image_percent = int(skeleton_distances.shape[1] * i / 100)
-        current_potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)
-        if len(current_potential_catheters[0]) > 1:
-            percent_with_two_possible_catheters = image_percent
-            if len(current_potential_catheters[0]) > 2:
+        current_potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)[0]
+        if len(current_potential_catheters) > 1:
+            # Remove potential catheters that are the same one (2 consecutive x)
+            current_potential_catheters_diffs = [current_potential_catheters[i] - current_potential_catheters[i-1] for i in range(1, len(current_potential_catheters))]
+            current_potential_catheters_indices_to_remove = np.array([i for i in range(len(current_potential_catheters_diffs)) if current_potential_catheters_diffs[i] == 1])
+            if len(current_potential_catheters_indices_to_remove) > 0:
+                mask = np.ones_like(current_potential_catheters, dtype=bool)
+                mask[current_potential_catheters_indices_to_remove] = False
+                current_potential_catheters = current_potential_catheters[mask, ...]
+        if len(current_potential_catheters) > 1:
+            percent_with_two_possible_catheters = i
+            if len(current_potential_catheters) > 2:
                 potential_catheters_width = {}
-                for potential_catheter_x in current_potential_catheters[0]:
+                for potential_catheter_x in current_potential_catheters:
                     potential_catheters_width[potential_catheter_x] = skeleton_distances[image_percent, potential_catheter_x]
                 potential_catheters_width = sorted(potential_catheters_width.items(), key=operator.itemgetter(1), reverse=True)
                 potential_catheters = potential_catheters_width[0:2]
                 potential_catheters = [t[0] for t in potential_catheters]
             else:
-                potential_catheters = current_potential_catheters[0]
+                potential_catheters = current_potential_catheters
             break
-        if len(current_potential_catheters[0]) == 1 and percent_with_one_possible_catheter < 0:
-            percent_with_one_possible_catheter = image_percent
-            potential_catheters = current_potential_catheters[0]
+        if len(current_potential_catheters) == 1 and percent_with_one_possible_catheter < 0:
+            percent_with_one_possible_catheter = i
+            potential_catheters = current_potential_catheters
     if percent_with_two_possible_catheters >= 0:
         percent = percent_with_two_possible_catheters
     elif percent_with_one_possible_catheter >= 0:
@@ -395,6 +405,7 @@ def find_ostium(skeleton_distances, bifurcations):
     else:
         print("Cannot find a possible catheter")
         return None, None
+    percent = int(skeleton_distances.shape[1] * percent / 100)
 
     print("potential catheters", potential_catheters)
     # Do the search twice. The first time it will search normally, the second time it will try to find the closest skeleton point from the dead end
@@ -417,7 +428,7 @@ def find_ostium(skeleton_distances, bifurcations):
             if i == 0:
                 # Normal search for ostium
                 start_time = time.time()
-                ostium_location, parent_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=True)
+                ostium_location, parent_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=False)
                 print(f"follow_path_bfs took {time.time() - start_time}s")
                 if ostium_location is not None:
                     print("ostium:", ostium_location, "parent:", parent_location)
@@ -510,7 +521,7 @@ class CrossingParams:
         """
         # Invalid if already explored
         if bifurcation in self.explored_bifurcations:
-            print_indented_log(indentation_level, f"Bifurcation {bifurcation} already explored", debug)
+            print_indented_log(indentation_level, f"Bifurcation {bifurcation} already explored {self.explored_bifurcations})", debug)
             return False
         # Invalid if too far
         vector = np.array([bifurcation[1] - self.bifurcation_node.x, bifurcation[0] - self.bifurcation_node.y])  # [x, y]
@@ -554,17 +565,18 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
     paths_to_explore = []
     crossing_params = None
     parent_path_points_key = None
-    heapq.heappush(paths_to_explore, (0, 0, current_node, crossing_params, parent_path_points_key))  # push items to the priority queue by adding a priority + tie breaker and crossing params alongside the node
+    heapq.heappush(paths_to_explore, (0, 0, np.random.ranf(), current_node, crossing_params, parent_path_points_key))  # push items to the priority queue by adding a priority + tie breaker and crossing params alongside the node
     explored_bifurcations = []
     path_points = [(parent_node.x, parent_node.y)]
     all_paths_points = {}  # (bifurcation (y, x), branch): points (x, y)
     parent_paths = {}  # bifurcation (y, x): (parent bifurcation (y, x), branch)
     ends_on_dead_end = False
-    widening_location = None
     first_bifurcation_crossing_info = None
     while len(paths_to_explore) > 0:
-        priority, branch_number, current_node, crossing_params, parent_path_points_key = heapq.heappop(paths_to_explore)
+        priority, branch_number, random_value, current_node, crossing_params, parent_path_points_key = heapq.heappop(paths_to_explore)
         print_indented_log(0 if crossing_params is None else 1, f"-> Popping node ({current_node.x}, {current_node.y}) of priority {priority} and branch number {branch_number}, {len(paths_to_explore)} remaining", debug)
+        if crossing_params is not None:
+            print_indented_log(1, f"crossing params values: angle={crossing_params.angle}, vessel_width={crossing_params.vessel_width}, explored_bifurcations={crossing_params.explored_bifurcations}", debug)
         path_points_key = ((current_node.parent.y, current_node.parent.x), branch_number)
         all_paths_points[path_points_key] = []
         nodes_in_path = 0
@@ -622,7 +634,6 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                             if search_for_crossing:
                                 return True
 
-                            widening_location = None  # Reset the widening location because it was probably just caused by the crossing
                             if len(crossing_params.explored_bifurcations) == 1:
                                 print_indented_log(indentation_level, f"Saving current node, path points key and explored bifurcations in case we find no crossing after more than 1 bifurcation", debug)
                                 first_bifurcation_crossing_info = (current_node, path_points_key, explored_bifurcations.copy())
@@ -632,10 +643,15 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 # Add the path points of the previously explored paths based on the bifurcations
                                 parent_bifurcation, branch = path_points_key
                                 crossing_path_points = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
-                                while parent_bifurcation != (crossing_params.bifurcation_node.y, crossing_params.bifurcation_node.x):
-                                    parent_bifurcation, branch = parent_paths[parent_bifurcation]
-                                    path_points_to_add = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
-                                    crossing_path_points += path_points_to_add
+                                # print(f"Need to find crossing params bifurcation ({crossing_params.bifurcation_node.y}, {crossing_params.bifurcation_node.x})")
+                                # print(f"all_paths_points: {all_paths_points}")
+                                # print(f"parent_bifurcation and branch: {path_points_key}")
+                                # print(f"parent_paths: {parent_paths}")
+                                # TODO find why this can cause an infinite loop for 2459788_LCA_0_0
+                                # while parent_bifurcation != (crossing_params.bifurcation_node.y, crossing_params.bifurcation_node.x):
+                                #     parent_bifurcation, branch = parent_paths[parent_bifurcation]
+                                #     path_points_to_add = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
+                                #     crossing_path_points += path_points_to_add
                                 path_points += list(reversed(crossing_path_points))
                                 crossing_params = None
                                 paths_to_explore.clear()
@@ -647,7 +663,8 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                 if is_bifurcation:
                     bifurcation = (current_node.y, current_node.x)
                     if bifurcation not in explored_bifurcations:
-                        explored_bifurcations.append(bifurcation)
+                        if crossing_params is None:
+                            explored_bifurcations.append(bifurcation)
                         parent_paths[bifurcation] = path_points_key
                         if check_for_crossings and (crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, indentation_level, debug)):
                             if search_for_ostium and crossing_params is None:
@@ -656,12 +673,13 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 if sharp_angle_location is not None:
                                     print_indented_log(indentation_level, f"sharp angle location: {sharp_angle_location}", debug)
                                     return sharp_angle_location, parent_location
-                                if widening_location is None:  # If we already found a widening location, we do not want to overwrite it
-                                    widening_location, parent_location = get_location_of_widening(nodes, vessel_widths)
-                                    if widening_location is not None:
-                                        # Instead of returning already, we must check if there is a crossing. In that case, the widening might just be caused by the crossing
-                                        print_indented_log(indentation_level, f"widening location: {widening_location}", debug)
-                                        widening_location = (widening_location, parent_location)
+                                widening_location, parent_location = get_location_of_widening(nodes, vessel_widths)
+                                if widening_location is not None:
+                                    # Instead of returning already, we must check if there is a crossing. In that case, the widening might just be caused by the crossing
+                                    bifurcation_widening_dist = np.sqrt((widening_location[1] - bifurcation[0]) ** 2 + (widening_location[0] - bifurcation[1]) ** 2)
+                                    print_indented_log(indentation_level, f"widening location: {widening_location}, bifurcation width is {skeleton_distances[bifurcation]} and dist is {bifurcation_widening_dist}", debug)
+                                    if skeleton_distances[bifurcation] < bifurcation_widening_dist:
+                                        return widening_location, parent_location
                             bifurcation_node = PathNode(bifurcation[1], bifurcation[0])
                             # add bifurcation branches to the priority queue
                             _, branches = detect_bifurcation(bifurcation, skeleton_distances)
@@ -679,7 +697,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                     print_indented_log(indentation_level, f"new branch {b} ({branch_x}, {branch_y}) with priority {priority}", debug)
                                     new_crossing_params.explored_bifurcations.append(bifurcation)
                                     new_node = PathNode(branch_point[0], branch_point[1], parent=bifurcation_node)
-                                    heapq.heappush(paths_to_explore, (priority, b, new_node, new_crossing_params, path_points_key))
+                                    heapq.heappush(paths_to_explore, (priority, b, np.random.ranf(), new_node, new_crossing_params, path_points_key))
                                 else:
                                     print_indented_log(indentation_level, f"branch {b} ({branch_x}, {branch_y}) is the parent", debug)
                     else:
@@ -701,16 +719,13 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
             node = first_bifurcation_crossing_info[0]
             path_points_key = first_bifurcation_crossing_info[1]
             explored_bifurcations = first_bifurcation_crossing_info[2]
-            heapq.heappush(paths_to_explore, (0, 0, node, crossing_params, path_points_key))
+            heapq.heappush(paths_to_explore, (0, 0, np.random.ranf(), node, crossing_params, path_points_key))
             first_bifurcation_crossing_info = None
 
     if get_branch_points:
         return path_points, ends_on_dead_end
 
     if search_for_ostium:
-        if widening_location is not None:
-            # We have found a widening and no crossing
-            return widening_location
         if crossing_params is not None:
             # We haven't found a crossing for a bifurcation. We then suppose the ostium is that bifurcation.
             return (crossing_params.bifurcation_node.x, crossing_params.bifurcation_node.y), (crossing_params.bifurcation_node.parent.x, crossing_params.bifurcation_node.parent.y)
@@ -1209,5 +1224,6 @@ if __name__ == '__main__':
                     vesselanalysis(image, output)
 
         if evaluate:
-            evaluation_results = sorted(evaluation_results.items(), key=operator.itemgetter(1))
-            print(evaluation_results)
+            sorted_evaluation_results = sorted(evaluation_results.items(), key=operator.itemgetter(1))
+            print(sorted_evaluation_results)
+            print(f"average: {np.mean(np.array(list(evaluation_results.values())))}px")
