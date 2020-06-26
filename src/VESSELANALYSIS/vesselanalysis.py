@@ -371,8 +371,8 @@ def find_ostium(skeleton_distances, bifurcations):
     percent_with_two_possible_catheters = -1
     potential_catheters = None
     for i in range(50):
-        if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 2:
-            break  # do not check too far after we found the first catheter
+        if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 5:
+            break  # do not check too far after we found the first catheter, but enough so we can check farther than the superposition of the two branches of the catheter
         image_percent = int(skeleton_distances.shape[1] * i / 100)
         current_potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)[0]
         if len(current_potential_catheters) > 1:
@@ -422,6 +422,10 @@ def find_ostium(skeleton_distances, bifurcations):
                 starting_point = (pixel_x-1, percent+1)
             elif skeleton_distances[percent+1, pixel_x+1] > 0:  # Bottom right
                 starting_point = (pixel_x+1, percent+1)
+            elif skeleton_distances[percent, pixel_x-1] > 0:  # Left
+                starting_point = (pixel_x-1, percent)
+            elif skeleton_distances[percent, pixel_x+1] > 0:  # Right
+                starting_point = (pixel_x+1, percent)
             else:  # No valid points to do the pathing
                 print(f"No valid points to do the pathing for ({pixel_x}, {percent})")
                 continue
@@ -599,10 +603,10 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                     angle_diff = abs(angle - crossing_params.angle)
                     vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
                     print_indented_log(indentation_level, f"angle difference of {angle_diff} degrees, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)", debug)
-                    if angle_diff <= 20 and vessel_width_ratio <= 1.35:
+                    if angle_diff <= (30 if search_for_ostium else 25) and vessel_width_ratio <= (1.45 if search_for_ostium else 1.35):  # Thresholds are higher for the catheter since we don't want to have false negatives
                         is_crossing = True
-                        # If the crossing was identified on the first bifurcation, it is likely not a crossing. We need to check if we can find a crossing on the other branch first.
-                        if len(crossing_params.explored_bifurcations) == 1:
+                        # If the crossing was identified on the first bifurcation, it is likely not a crossing, unless we are following a catheter. We need to check if we can find a crossing on the other branch first.
+                        if len(crossing_params.explored_bifurcations) == 1 and not search_for_ostium:
                             print_indented_log(indentation_level, "We would have found a crossing, but it is the first bifurcation... Now searching for a crossing from the other bifurcation branch.", debug)
                             # Backtracking to the bifurcation we think might be a crossing
                             backtrack_node = current_node.parent
@@ -633,7 +637,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                         if is_crossing:
                             if search_for_crossing:
                                 return True
-
+                            indentation_level -= 1
                             if len(crossing_params.explored_bifurcations) == 1:
                                 print_indented_log(indentation_level, f"Saving current node, path points key and explored bifurcations in case we find no crossing after more than 1 bifurcation", debug)
                                 first_bifurcation_crossing_info = (current_node, path_points_key, explored_bifurcations.copy())
@@ -669,7 +673,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                         if check_for_crossings and (crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, indentation_level, debug)):
                             if search_for_ostium and crossing_params is None:
                                 nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
-                                sharp_angle_location, parent_location = get_location_of_sharp_angle(nodes)
+                                sharp_angle_location, parent_location = get_location_of_sharp_angle(nodes, show_graph_only_on_detection=debug)
                                 if sharp_angle_location is not None:
                                     print_indented_log(indentation_level, f"sharp angle location: {sharp_angle_location}", debug)
                                     return sharp_angle_location, parent_location
@@ -704,7 +708,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                         print_indented_log(indentation_level, f"bifurcation {bifurcation} has already been explored", debug)
                     break  # finished on a bifurcation
 
-            next_point = get_next_path_point(current_node, skeleton_distances, bifurcations)
+            next_point = get_next_path_point(current_node, skeleton_distances, bifurcations, debug)
 
             if next_point is None:
                 print_indented_log(indentation_level, f"Dead end", debug)
@@ -737,7 +741,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
     return None
 
 
-def get_next_path_point(current_node, skeleton_distances, bifurcations):
+def get_next_path_point(current_node, skeleton_distances, bifurcations, debug=False):
     """
     Searches for the points around the current node for the next point in the path.
     :param current_node: The current node of the path finding.
@@ -747,10 +751,20 @@ def get_next_path_point(current_node, skeleton_distances, bifurcations):
     """
     # Find the next potential nodes
     parent_is_bifurcation = current_node.parent is not None and bifurcations[current_node.parent.y, current_node.parent.x] > 0
-    patch = skeleton_distances[current_node.y-1:current_node.y+2, current_node.x-1:current_node.x+2]  # 3x3 around the current point
-    # plt.title(f"Current node ({current_node.x}, {current_node.y}) of width {skeleton_distances[current_node.y, current_node.x]}")
-    # plt.imshow(patch)
-    # plt.show()
+    pad_top = current_node.y == 0
+    pad_bottom = current_node.y == skeleton_distances.shape[0] - 1
+    pad_left = current_node.x == 0
+    pad_right = current_node.x == skeleton_distances.shape[1] - 1
+    patch = np.zeros((3, 3))
+    top_index = 1 if pad_top else 0
+    bottom_index = 2 if pad_bottom else 3
+    left_index = 1 if pad_left else 0
+    right_index = 2 if pad_right else 3
+    patch[top_index:bottom_index, left_index:right_index] = skeleton_distances[current_node.y-(1-top_index):current_node.y+bottom_index-1, current_node.x-(1-left_index):current_node.x+right_index-1]  # 3x3 around the current point
+    # if debug:
+    #     plt.title(f"Current node ({current_node.x}, {current_node.y}) of width {skeleton_distances[current_node.y, current_node.x]}")
+    #     plt.imshow(patch)
+    #     plt.show()
     potential_points = []
     for y in range(patch.shape[0]):
         for x in range(patch.shape[1]):
@@ -849,10 +863,10 @@ def get_location_of_widening(nodes, vessel_width, show_graph=False):
     :param show_graph: True to show a plot of the vessel widths.
     :return: The location (x, y) of the widening alongside of its parent if found, else None twice.
     """
-    INTERVAL_SIZE = 15
+    INTERVAL_SIZE = 30
     RATIO_THRESHOLD = 1.5
     if show_graph:
-        plt.title("Vessel width for pixels of skeleton segment")
+        plt.title(f"Vessel width for pixels of skeleton segment from ({nodes[0].x}, {nodes[0].y}) to ({nodes[-1].x}, {nodes[-1].y})")
         plt.plot(vessel_width)
         for i in range(INTERVAL_SIZE, len(vessel_width)):
             if vessel_width[i-INTERVAL_SIZE] > 0:
@@ -873,7 +887,7 @@ def get_location_of_widening(nodes, vessel_width, show_graph=False):
     return None, None
 
 
-def get_location_of_sharp_angle(nodes, show_graph=False):
+def get_location_of_sharp_angle(nodes, show_graph=False, show_graph_only_on_detection=False):
     """
     This method detects a sharp angle from a list of nodes by analyzing the gradient of the angle progression between the nodes.
     :param nodes: The nodes (list of PathNode class) of the vessel.
@@ -881,7 +895,7 @@ def get_location_of_sharp_angle(nodes, show_graph=False):
     :return: The location (x, y) of the sharp angle alongside of its parent if found, else None twice.
     """
     VECTOR_PIXEL_COUNT = 5
-    MINIMUM_ANGLE_GRADIENT_INTENSITY = 3
+    MINIMUM_ANGLE_GRADIENT_INTENSITY = 3.5
     MAXIMUM_CURVE_LENGTH = 25
     angles = []
     for i in range(VECTOR_PIXEL_COUNT-1, len(nodes)):
@@ -906,7 +920,7 @@ def get_location_of_sharp_angle(nodes, show_graph=False):
     angles = gaussian_filter1d(angles, VECTOR_PIXEL_COUNT)
     degrees_gradient = abs(np.gradient(angles))
 
-    if show_graph:
+    if show_graph or (show_graph_only_on_detection and degrees_gradient.max() >= MINIMUM_ANGLE_GRADIENT_INTENSITY):
         plt.title("Angle gradient of direction vector of the skeleton segment")
         plt.axhline(degrees_gradient.mean(), color='g')
         if degrees_gradient.max() >= MINIMUM_ANGLE_GRADIENT_INTENSITY:
