@@ -673,7 +673,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                         if check_for_crossings and (crossing_params is None or crossing_params.is_bifurcation_valid(bifurcation, indentation_level, debug)):
                             if search_for_ostium and crossing_params is None:
                                 nodes, vessel_widths = get_nodes_and_vessel_width(current_node, skeleton_distances)
-                                sharp_angle_location, parent_location = get_location_of_sharp_angle(nodes, show_graph_only_on_detection=debug)
+                                sharp_angle_location, parent_location = get_location_of_sharp_angle(nodes, skeleton_distances.shape, show_graph_only_on_detection=debug)
                                 if sharp_angle_location is not None:
                                     print_indented_log(indentation_level, f"sharp angle location: {sharp_angle_location}", debug)
                                     return sharp_angle_location, parent_location
@@ -887,16 +887,18 @@ def get_location_of_widening(nodes, vessel_width, show_graph=False):
     return None, None
 
 
-def get_location_of_sharp_angle(nodes, show_graph=False, show_graph_only_on_detection=False):
+def get_location_of_sharp_angle(nodes, image_shape, show_graph=False, show_graph_only_on_detection=False):
     """
     This method detects a sharp angle from a list of nodes by analyzing the gradient of the angle progression between the nodes.
     :param nodes: The nodes (list of PathNode class) of the vessel.
+    :param image_shape: The numpy shape of the image.
     :param show_graph: True to show a plot of the angle progression.
+    :param show_graph_only_on_detection: True to show a plot of the angle progression when a sharp angle is found.
     :return: The location (x, y) of the sharp angle alongside of its parent if found, else None twice.
     """
     VECTOR_PIXEL_COUNT = 5
-    MINIMUM_ANGLE_GRADIENT_INTENSITY = 3.5
-    MAXIMUM_CURVE_LENGTH = 25
+    MINIMUM_ANGLE_GRADIENT_INTENSITY = 2.75
+    MAXIMUM_CURVE_LENGTH = 30
     angles = []
     for i in range(VECTOR_PIXEL_COUNT-1, len(nodes)):
         points = []
@@ -944,12 +946,16 @@ def get_location_of_sharp_angle(nodes, show_graph=False, show_graph_only_on_dete
             if not above_average[i]:
                 end = i
                 break
-        print(end-start, "pixels long")
         if end - start <= MAXIMUM_CURVE_LENGTH:  # We don't want the curve to be long, otherwise it's probably not the tip of the catheter
             middle_node_index = degrees_gradient.argmax() + int(VECTOR_PIXEL_COUNT/2)
             node = nodes[middle_node_index]
             parent_node = nodes[middle_node_index - 1]
-            return (node.x, node.y), (parent_node.x, parent_node.y)
+            if node.y < image_shape[0] / 2:
+                return (node.x, node.y), (parent_node.x, parent_node.y)
+            else:
+                print(f"It is very unlikely that the sharp angle we detected at ({node.x}, {node.y}) is in the catheter because it is in the bottom half of the image.")
+        elif show_graph or (show_graph_only_on_detection and degrees_gradient.max() >= MINIMUM_ANGLE_GRADIENT_INTENSITY):
+            print(f"Sharp angle was discarded because the curve is {end - start} pixels long")
     return None, None
 
 
