@@ -351,11 +351,31 @@ def va_creategraph(ori, cc, dft, skel, nbcomponents, diammin):
 
 
 def fill_missing_pixels(image):
+    # Add a 1 pixel border to everything in the image and saturate values
     filter = np.array([[1, 1, 1],
                        [1, 1, 1],
                        [1, 1, 1]])
     res = convolve2d(image, filter, mode="same")
     image[np.where(res >= res.max() * 0.2)] = 255
+
+    # Fill small holes
+    image[np.where(image > 0)] = 1
+    image = image.astype(np.int8)
+    image[np.where(image <= 0)] = -1
+    filter_center = np.array([[1, 1, 1],
+                              [1,-1, 1],
+                              [1, 1, 1]])
+    res = convolve2d(image, filter_center, mode="same")
+    image[np.where(res == 9)] = 1
+    for i in range(2):
+        for j in range(2):
+            filter_corner = np.copy(filter_center)
+            filter_corner[i*2, j*2] = -1
+            res = convolve2d(image, filter_corner, mode="same")
+            image[np.where(res == 9)] = 1
+    image[np.where(image <= 0)] = 0
+    
+    return image
 
 
 def find_ostium(raw_image, skeleton_distances, bifurcations):
@@ -386,8 +406,6 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
                 current_potential_catheters = current_potential_catheters[mask, ...]
         if len(current_potential_catheters) > 1:
             if len(current_potential_catheters) > 2:
-                potential_catheters_widths = {}
-                potential_catheters_variance = {}
                 potential_catheters_intensity = {}
                 for potential_catheter_x in current_potential_catheters:
                     # follow the potential catheters to get their average width and variance
@@ -399,19 +417,10 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
                         path_points = path_points[:-last_width]
                     if len(path_points) > 0:
                         intensities = raw_image[path_points[:, 1], path_points[:, 0]]
-                        widths = skeleton_distances[path_points[:, 1], path_points[:, 0]]
-                        # print(f"catheter {potential_catheter_x} with {len(path_points)} points, average width: {widths.mean()}, variance: {widths.var()}")
-                        # potential_catheters_widths[potential_catheter_x] = widths.mean()
-                        potential_catheters_widths[potential_catheter_x] = widths[0]
-                        potential_catheters_variance[potential_catheter_x] = widths.var() / widths.mean()
                         potential_catheters_intensity[potential_catheter_x] = intensities.mean()
-                print("width", potential_catheters_widths)
-                print("variance", potential_catheters_variance)
                 print("intensity", potential_catheters_intensity)
-                potential_catheters_widths = sorted(potential_catheters_widths.items(), key=operator.itemgetter(1), reverse=True)
                 potential_catheters_intensity = sorted(potential_catheters_intensity.items(), key=operator.itemgetter(1))
                 # keep the two potential catheters that have the lower pixel intensity (darker)
-                # current_potential_catheters = potential_catheters_widths[0:2]
                 current_potential_catheters = potential_catheters_intensity[0:2]
                 current_potential_catheters = [t[0] for t in current_potential_catheters]
                 current_potential_catheters.sort()  # put them back in left to right order
@@ -555,6 +564,7 @@ class CrossingParams:
         :param debug: This method will print logs only if that parameter is True.
         :return: True if the bifurcation is within 45 degrees and 100 pixels.
         """
+        MAX_CROSSING_DISTANCE = 100
         # Invalid if already explored
         if bifurcation in self.explored_bifurcations:
             print_indented_log(indentation_level, f"Bifurcation {bifurcation} already explored {self.explored_bifurcations})", debug)
@@ -563,12 +573,12 @@ class CrossingParams:
         vector = np.array([bifurcation[1] - self.bifurcation_node.x, bifurcation[0] - self.bifurcation_node.y])  # [x, y]
         distance = np.sqrt(np.square(vector).sum())
         print_indented_log(indentation_level, f"Bifurcation {bifurcation} has a vector {vector} and distance of {distance} pixels", debug)
-        if distance > 100:
+        if distance > MAX_CROSSING_DISTANCE:
             print_indented_log(indentation_level, f"Bifurcation {bifurcation} is too far ({distance} pixels)", debug)
             return False
         # Invalid if not in the right direction
         angle = get_angle_from_vector(vector, previous_angle=self.angle)
-        maximum_angle = 90 - 75 * distance / 100
+        maximum_angle = 90 - 75 * distance / MAX_CROSSING_DISTANCE
         print_indented_log(indentation_level, f"Maximum angle = {maximum_angle}", debug)
         if abs(angle - self.angle) > maximum_angle:
             print_indented_log(indentation_level, f"Bifurcation {bifurcation} is not in the right direction (at {angle} degrees for a {abs(angle - self.angle)} degrees difference)", debug)
@@ -675,7 +685,9 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 first_bifurcation_crossing_info = (current_node, path_points_key, explored_bifurcations.copy())
                             else:
                                 print_indented_log(indentation_level, "We have found a crossing, now clearing the priority queue", debug)
-                                first_bifurcation_crossing_info = None
+                                if first_bifurcation_crossing_info is not None:
+                                    print_indented_log(indentation_level, "Also clearing the first bifurcation crossing info", debug)
+                                    first_bifurcation_crossing_info = None
                                 # Add the path points of the previously explored paths based on the bifurcations
                                 parent_bifurcation, branch = path_points_key
                                 crossing_path_points = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
@@ -751,6 +763,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
 
         # If there are no more paths to explore and we still have a first bifurcation crossing info, that means we found no multi bifurcation crossing, so we accept the first bifurcation crossing
         if len(paths_to_explore) == 0 and first_bifurcation_crossing_info is not None:
+            print_indented_log(indentation_level, "No more path to explore, we accept the first bifurcation crossing", debug)
             crossing_params = None
             node = first_bifurcation_crossing_info[0]
             path_points_key = first_bifurcation_crossing_info[1]
@@ -897,7 +910,7 @@ def get_location_of_widening(nodes, vessel_width, show_graph=False, show_graph_o
     :return: The location (x, y) of the widening alongside of its parent if found, else None twice.
     """
     INTERVAL_SIZE = 30
-    RATIO_THRESHOLD = 1.5
+    RATIO_THRESHOLD = 1.6
     widening_location = None
     widening_parent_location = None
 
@@ -1201,7 +1214,7 @@ if __name__ == '__main__':
         file_name = file_name.split("_seg")[0]
         raw_image_file_name = file_name + f".{file_type}"
         raw_image = cv2.imread(raw_image_file_name, cv2.IMREAD_GRAYSCALE)
-        fill_missing_pixels(segmented_image)
+        segmented_image = fill_missing_pixels(segmented_image)
         skeleton, bifurcations = vesselanalysis(segmented_image, f"{file_name}_skeleton")
         ostium, ostium_parent = find_ostium(raw_image, skeleton, bifurcations)
         skeleton[skeleton > 0] = 1
@@ -1243,7 +1256,7 @@ if __name__ == '__main__':
                     segmentation_file_name = f"{file_name}_seg"
                     segmentation_file = f"{path}\\{segmentation_file_name}.{file_type}"
                     seg_image = cv2.imread(segmentation_file, cv2.IMREAD_GRAYSCALE)
-                    fill_missing_pixels(seg_image)
+                    seg_image = fill_missing_pixels(seg_image)
 
                     if visualize:
                         cv2.imwrite(f"{path}\\{segmentation_file_name}_filled.png", seg_image)
@@ -1269,7 +1282,7 @@ if __name__ == '__main__':
                             evaluation_results[file_name] = float('inf')
 
                 else:
-                    fill_missing_pixels(image)
+                    image = fill_missing_pixels(image)
                     # file_name = file.split("segmented")[0]
                     file_name = file.split("seg")[0]
                     output = f'{output_folder}\\{file_name}skeletonized'
