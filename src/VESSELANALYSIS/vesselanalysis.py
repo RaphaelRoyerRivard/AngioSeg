@@ -358,11 +358,12 @@ def fill_missing_pixels(image):
     image[np.where(res >= res.max() * 0.2)] = 255
 
 
-def find_ostium(skeleton_distances, bifurcations):
+def find_ostium(raw_image, skeleton_distances, bifurcations):
     """
     This method searches for catheters on top of the image to detect the ostium.
     The ostium is detected by a big change in width, a sudden change in angle or the first encountered bifurcation.
     If the catheter is not connected to the coronary tree, we find the closest skeleton point and identify it as the ostium.
+    :param raw_image: The 2D numpy array of pixel intensities.
     :param skeleton_distances: Skeleton distances 2D numpy array.
     :param bifurcations: The bifurcations 2D numpy array.
     :return: The ostium location (x, y) and the parent point (x, y) if any to know in which direction to explore after.
@@ -371,7 +372,7 @@ def find_ostium(skeleton_distances, bifurcations):
     percent_with_two_possible_catheters = -1
     potential_catheters = None
     for i in range(50):
-        if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 5:
+        if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 25:
             break  # do not check too far after we found the first catheter, but enough so we can check farther than the superposition of the two branches of the catheter
         image_percent = int(skeleton_distances.shape[1] * i / 100)
         current_potential_catheters = np.where(skeleton_distances[image_percent, :] > 0)[0]
@@ -384,16 +385,40 @@ def find_ostium(skeleton_distances, bifurcations):
                 mask[current_potential_catheters_indices_to_remove] = False
                 current_potential_catheters = current_potential_catheters[mask, ...]
         if len(current_potential_catheters) > 1:
-            percent_with_two_possible_catheters = i
             if len(current_potential_catheters) > 2:
-                potential_catheters_width = {}
+                potential_catheters_widths = {}
+                potential_catheters_variance = {}
+                potential_catheters_intensity = {}
                 for potential_catheter_x in current_potential_catheters:
-                    potential_catheters_width[potential_catheter_x] = skeleton_distances[image_percent, potential_catheter_x]
-                potential_catheters_width = sorted(potential_catheters_width.items(), key=operator.itemgetter(1), reverse=True)
-                potential_catheters = potential_catheters_width[0:2]
-                potential_catheters = [t[0] for t in potential_catheters]
-            else:
-                potential_catheters = current_potential_catheters
+                    # follow the potential catheters to get their average width and variance
+                    starting_point = get_catheter_starting_point(potential_catheter_x, image_percent, skeleton_distances)
+                    path_points, ends_on_dead_end = follow_path_bfs(skeleton_distances, bifurcations, starting_point, get_branch_points=True, parent=(potential_catheter_x, image_percent), debug=False)
+                    path_points = np.array(path_points)
+                    if not ends_on_dead_end:
+                        last_width = int(round(skeleton_distances[path_points[-1, 1], path_points[-1, 0]]))
+                        path_points = path_points[:-last_width]
+                    if len(path_points) > 0:
+                        intensities = raw_image[path_points[:, 1], path_points[:, 0]]
+                        widths = skeleton_distances[path_points[:, 1], path_points[:, 0]]
+                        # print(f"catheter {potential_catheter_x} with {len(path_points)} points, average width: {widths.mean()}, variance: {widths.var()}")
+                        # potential_catheters_widths[potential_catheter_x] = widths.mean()
+                        potential_catheters_widths[potential_catheter_x] = widths[0]
+                        potential_catheters_variance[potential_catheter_x] = widths.var() / widths.mean()
+                        potential_catheters_intensity[potential_catheter_x] = intensities.mean()
+                print("width", potential_catheters_widths)
+                print("variance", potential_catheters_variance)
+                print("intensity", potential_catheters_intensity)
+                potential_catheters_widths = sorted(potential_catheters_widths.items(), key=operator.itemgetter(1), reverse=True)
+                potential_catheters_intensity = sorted(potential_catheters_intensity.items(), key=operator.itemgetter(1))
+                # keep the two potential catheters that have the lower pixel intensity (darker)
+                # current_potential_catheters = potential_catheters_widths[0:2]
+                current_potential_catheters = potential_catheters_intensity[0:2]
+                current_potential_catheters = [t[0] for t in current_potential_catheters]
+                current_potential_catheters.sort()  # put them back in left to right order
+            if percent_with_one_possible_catheter >= 0 and i - percent_with_one_possible_catheter > 2 and abs(current_potential_catheters[0] - current_potential_catheters[1]) > 10:
+                break  # if the two catheters segments are distanced vertically and horizontally, one of those is probably a vessel
+            potential_catheters = current_potential_catheters
+            percent_with_two_possible_catheters = i
             break
         if len(current_potential_catheters) == 1 and percent_with_one_possible_catheter < 0:
             percent_with_one_possible_catheter = i
@@ -415,19 +440,9 @@ def find_ostium(skeleton_distances, bifurcations):
         catheter_points = []
         catheter_tips = []
         for pixel_x in potential_catheters:
-            print(f"\nTrying for pontential catheter at ({pixel_x}, {percent})")
-            if skeleton_distances[percent+1, pixel_x] > 0:  # Bottom
-                starting_point = (pixel_x, percent+1)
-            elif skeleton_distances[percent+1, pixel_x-1] > 0:  # Bottom left
-                starting_point = (pixel_x-1, percent+1)
-            elif skeleton_distances[percent+1, pixel_x+1] > 0:  # Bottom right
-                starting_point = (pixel_x+1, percent+1)
-            elif skeleton_distances[percent, pixel_x-1] > 0:  # Left
-                starting_point = (pixel_x-1, percent)
-            elif skeleton_distances[percent, pixel_x+1] > 0:  # Right
-                starting_point = (pixel_x+1, percent)
-            else:  # No valid points to do the pathing
-                print(f"No valid points to do the pathing for ({pixel_x}, {percent})")
+            print(f"\nTrying for potential catheter at ({pixel_x}, {percent})")
+            starting_point = get_catheter_starting_point(pixel_x, percent, skeleton_distances)
+            if starting_point is None:
                 continue
             if i == 0:
                 # Normal search for ostium
@@ -475,6 +490,23 @@ def find_ostium(skeleton_distances, bifurcations):
             return ostium_location, None
 
     return None, None
+
+
+def get_catheter_starting_point(x, y, skeleton_distances):
+    if skeleton_distances[y, x] > 0:  # Bottom
+        starting_point = (x, y+1)
+    elif skeleton_distances[y+1, x-1] > 0:  # Bottom left
+        starting_point = (x-1, y+1)
+    elif skeleton_distances[y+1, x+1] > 0:  # Bottom right
+        starting_point = (x+1, y+1)
+    elif skeleton_distances[y, x-1] > 0:  # Left
+        starting_point = (x-1, y)
+    elif skeleton_distances[y, x+1] > 0:  # Right
+        starting_point = (x+1, y)
+    else:  # No valid points to do the pathing
+        print(f"No valid points to do the pathing for ({x}, {y})")
+        return None
+    return starting_point
 
 
 class PathNode:
@@ -677,7 +709,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 if sharp_angle_location is not None:
                                     print_indented_log(indentation_level, f"sharp angle location: {sharp_angle_location}", debug)
                                     return sharp_angle_location, parent_location
-                                widening_location, parent_location = get_location_of_widening(nodes, vessel_widths)
+                                widening_location, parent_location = get_location_of_widening(nodes, vessel_widths, show_graph_only_on_detection=debug)
                                 if widening_location is not None:
                                     # Instead of returning already, we must check if there is a crossing. In that case, the widening might just be caused by the crossing
                                     bifurcation_widening_dist = np.sqrt((widening_location[1] - bifurcation[0]) ** 2 + (widening_location[0] - bifurcation[1]) ** 2)
@@ -855,17 +887,30 @@ def get_nodes_and_vessel_width(end_node, skeleton_distances):
     return nodes, vessel_width
 
 
-def get_location_of_widening(nodes, vessel_width, show_graph=False):
+def get_location_of_widening(nodes, vessel_width, show_graph=False, show_graph_only_on_detection=False):
     """
     This method detects a change in the width of the vessel from a list of nodes and a list of vessel widths.
     :param nodes: List of PathNodes.
     :param vessel_width: A list of vessel widths as integers.
     :param show_graph: True to show a plot of the vessel widths.
+    :param show_graph_only_on_detection: True to show a plot of the angle progression when a sharp angle is found.
     :return: The location (x, y) of the widening alongside of its parent if found, else None twice.
     """
     INTERVAL_SIZE = 30
     RATIO_THRESHOLD = 1.5
-    if show_graph:
+    widening_location = None
+    widening_parent_location = None
+
+    for i in range(INTERVAL_SIZE, len(vessel_width)):
+        if vessel_width[i-INTERVAL_SIZE] > 0:
+            ratio = vessel_width[i] / vessel_width[i-INTERVAL_SIZE]
+            if ratio >= RATIO_THRESHOLD:
+                print(f"Widening detected with ratio of {ratio}")
+                widening_location = (nodes[i].x, nodes[i].y)
+                widening_parent_location = (nodes[i-1].x, nodes[i-1].y)
+                break
+
+    if show_graph or (show_graph_only_on_detection and widening_location is not None):
         plt.title(f"Vessel width for pixels of skeleton segment from ({nodes[0].x}, {nodes[0].y}) to ({nodes[-1].x}, {nodes[-1].y})")
         plt.plot(vessel_width)
         for i in range(INTERVAL_SIZE, len(vessel_width)):
@@ -873,18 +918,13 @@ def get_location_of_widening(nodes, vessel_width, show_graph=False):
                 ratio = vessel_width[i] / vessel_width[i-INTERVAL_SIZE]
                 if ratio >= 1.5:
                     plt.axvline(i)
+                    plt.axvspan(i-INTERVAL_SIZE, i, color='y')
                     break
         plt.xlabel("Segment pixel #")
         plt.ylabel("Vessel width in pixels")
         plt.show()
 
-    for i in range(INTERVAL_SIZE, len(vessel_width)):
-        if vessel_width[i-INTERVAL_SIZE] > 0:
-            ratio = vessel_width[i] / vessel_width[i-INTERVAL_SIZE]
-            if ratio >= RATIO_THRESHOLD:
-                return (nodes[i].x, nodes[i].y), (nodes[i-1].x, nodes[i-1].y)
-
-    return None, None
+    return widening_location, widening_parent_location
 
 
 def get_location_of_sharp_angle(nodes, image_shape, show_graph=False, show_graph_only_on_detection=False):
@@ -1156,12 +1196,14 @@ if __name__ == '__main__':
     if os.path.isfile(input_path):
         print("Input is a file")
         file_type = input_path.split('.')[-1]
-        image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
+        segmented_image = cv2.imread(input_path, cv2.IMREAD_GRAYSCALE)
         file_name = input_path.split(f".{file_type}")[0]
         file_name = file_name.split("_seg")[0]
-        fill_missing_pixels(image)
-        skeleton, bifurcations = vesselanalysis(image, f"{file_name}_skeleton")
-        ostium, ostium_parent = find_ostium(skeleton, bifurcations)
+        raw_image_file_name = file_name + f".{file_type}"
+        raw_image = cv2.imread(raw_image_file_name, cv2.IMREAD_GRAYSCALE)
+        fill_missing_pixels(segmented_image)
+        skeleton, bifurcations = vesselanalysis(segmented_image, f"{file_name}_skeleton")
+        ostium, ostium_parent = find_ostium(raw_image, skeleton, bifurcations)
         skeleton[skeleton > 0] = 1
         visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
         visualization[:, :, 1] -= bifurcations
@@ -1190,50 +1232,41 @@ if __name__ == '__main__':
                 if not os.path.exists(output_folder):
                     os.mkdir(output_folder)
 
-                if visualize and "_seg" in file:
-                    continue
-
-                if evaluate and "_seg" not in file:
+                if (visualize or evaluate) and "_seg" in file:
                     continue
 
                 image_path = f'{path}\\{file}'
                 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-                if visualize:
-                    # file_name = file.split(".jpg")[0]
-                    # skeleton_file_name = f'{path}\\segmented\\skeletonized\\{file_name}_skeletonized'
-                    # if os.path.exists(f'{skeleton_file_name}_components.png'):
-                    #     skeleton = cv2.imread(f'{skeleton_file_name}_components.png', cv2.IMREAD_COLOR)
-                    # else:
-                    #     skeleton = cv2.imread(f'{skeleton_file_name}.png', cv2.IMREAD_GRAYSCALE)
+                if visualize or evaluate:
                     file_name = file.split(f".{file_type}")[0]
                     segmentation_file_name = f"{file_name}_seg"
                     segmentation_file = f"{path}\\{segmentation_file_name}.{file_type}"
                     seg_image = cv2.imread(segmentation_file, cv2.IMREAD_GRAYSCALE)
                     fill_missing_pixels(seg_image)
-                    cv2.imwrite(f"{path}\\{segmentation_file_name}_filled.png", seg_image)
-                    output = f'{output_folder}\\{file_name}_skeleton'
-                    skeleton, components = vesselanalysis(seg_image, output)
-                    output = f'{output_folder}\\{file_name}_overlap.png'
-                    overlap(image, seg_image, skeleton, components, output)
 
-                elif evaluate:
-                    file_name = file.split("_seg")[0]
-                    fill_missing_pixels(image)
-                    skeleton, bifurcations = vesselanalysis(image, f"{output_folder}\\{file_name}_skeleton")
-                    ostium, ostium_parent = find_ostium(skeleton, bifurcations)
-                    if ostium is not None:
-                        ostium_gt_file_name = f"{file_name}_ostium.txt"
-                        f = open(f"{path}\\{ostium_gt_file_name}", 'r')
-                        ostium_gt = f.readline().split(" ")
-                        ostium_gt = (int(ostium_gt[0]), int(ostium_gt[1]))
-                        distance = np.sqrt((ostium[0] - ostium_gt[0]) ** 2 + (ostium[1] - ostium_gt[1]) ** 2)
-                        max_distance = np.sqrt(image.shape[0] ** 2 + image.shape[1] ** 2)
-                        relative_distance = distance / max_distance
-                        print(f"distance: {int(round(distance))}px or {int(relative_distance * 1000) / 10}%")
-                        evaluation_results[file_name] = distance
+                    if visualize:
+                        cv2.imwrite(f"{path}\\{segmentation_file_name}_filled.png", seg_image)
+                        output = f'{output_folder}\\{file_name}_skeleton'
+                        skeleton, components = vesselanalysis(seg_image, output)
+                        output = f'{output_folder}\\{file_name}_overlap.png'
+                        overlap(image, seg_image, skeleton, components, output)
+
                     else:
-                        evaluation_results[file_name] = float('inf')
+                        skeleton, bifurcations = vesselanalysis(seg_image, f"{output_folder}\\{file_name}_skeleton")
+                        ostium, ostium_parent = find_ostium(image, skeleton, bifurcations)
+                        if ostium is not None:
+                            ostium_gt_file_name = f"{file_name}_ostium.txt"
+                            f = open(f"{path}\\{ostium_gt_file_name}", 'r')
+                            ostium_gt = f.readline().split(" ")
+                            ostium_gt = (int(ostium_gt[0]), int(ostium_gt[1]))
+                            distance = np.sqrt((ostium[0] - ostium_gt[0]) ** 2 + (ostium[1] - ostium_gt[1]) ** 2)
+                            max_distance = np.sqrt(image.shape[0] ** 2 + image.shape[1] ** 2)
+                            relative_distance = distance / max_distance
+                            print(f"distance: {int(round(distance))}px or {int(relative_distance * 1000) / 10}%")
+                            evaluation_results[file_name] = distance
+                        else:
+                            evaluation_results[file_name] = float('inf')
 
                 else:
                     fill_missing_pixels(image)
