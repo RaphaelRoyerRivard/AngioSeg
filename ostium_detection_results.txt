@@ -1,6 +1,8 @@
-[('G12_RCA_0_0_2', 4.123105625617661), 
+[('2279417_RCA_90_0', 4.123105625617661), 
+('G12_RCA_0_0_2', 4.123105625617661), 
 ('1998698_LCA_30_25', 4.242640687119285), 
 ('KD5_RCA_90_0', 4.47213595499958), 
+('G12_LCA_-9_40', 5.0990195135927845), 
 ('P32_RCA_0_0', 5.385164807134504), 
 ('G15_LCA_0_0', 5.830951894845301), 
 ('G16_LCA_30_-25', 5.830951894845301), 
@@ -8,13 +10,16 @@
 ('KD6_LCA_-30_-25', 6.0), 
 ('P25_LCA_-30_-25', 6.082762530298219), 
 ('1933060_LCA_-30_-25_2', 6.324555320336759), 
+('KD4_LCA_-30_-1', 6.708203932499369), 
 ('3013714_LCA_-10_40', 7.0), 
+('P31_LCA_90_0', 7.0), 
 ('1765918_LCA_-30_0', 7.211102550927978), 
 ('2006592_RCA_1_0', 7.211102550927978), 
 ('KD12_LCA_-30_-20', 7.615773105863909), 
 ('1667408_RCA_0_0', 8.06225774829855), 
 ('1823377_LCA_0_0', 8.06225774829855), 
 ('P28_LCA_-30_-25_3', 8.06225774829855), 
+('2529895_LCA_-30_1', 8.602325267042627), 
 ('2409730_LCA_30_25', 9.0), 
 ('G6_LCA_40_30', 9.899494936611665), 
 ('KD1_LCA_-30_-25', 10.295630140987), 
@@ -27,18 +32,22 @@
 ('3084016_LCA_-30_0', 17.029386365926403), 
 ('G2_LCA_31_15', 17.029386365926403), 
 ('2391488_LCA_90_0', 18.027756377319946), 
+('P28_LCA_65_-20', 18.027756377319946), 
 ('2204757_LCA_-30_0', 19.4164878389476), 
 ('KD12_RCA_90_1', 20.396078054371138), 
 ('G16_RCA_90_0_2', 21.93171219946131), 
 ('2022653_LCA_-30_-25_2', 23.021728866442675), 
 ('P26_LCA_-30_0', 23.021728866442675), 
 ('2459788_LCA_0_0', 23.08679276123039), 
+('2104598_LCA_90_2', 23.40939982143925), 
+('2252050_XCA_0_0', 25.317977802344327), 
 ('2465782_RCA_90_0', 28.442925306655784), 
 ('3042524_LCA_0_0', 28.861739379323623), 
 ('S1_15_005', 30.0), 
 ('2013129_LCA_30_5', 30.528675044947494), 
 ('1939394_LCA_30_25', 31.304951684997057), 
 ('G5_LCA_90_1', 31.304951684997057), 
+('G9_LCA_10_40', 31.78049716414141), 
 ('2214268_LCA_90_0', 31.953090617340916), 
 ('2465782_LCA_-30_0_2', 32.01562118716424), 
 ('2484579_LCA_0_0', 35.17101079013795), 
@@ -50,23 +59,14 @@
 ('2364475_LCA_90_0', 46.09772228646444),        won't fix (catheter is superimposed to the vessel)
 ('3013714_LCA_90_0_2', 47.75981574503821),      not too far (slightly misplaced because the detached tip is closer to another vessel)
 ('P29_LCA_90_0_1', 53.23532661682466),          actually well placed
-('2104598_LCA_90_2', 55.154328932550705),       should be fixed after segmentation correction (catheter is not segmented until the end)
 ('2022653_LCA_90_0', 57.0087712549569),         won't fix (catheter is superimposed to the vessel)
 ('KD5_LCA_-30_-25', 59.00847396772772),         won't fix (triple crossing at the catheter's curve)
-('2252050_XCA_0_0', 59.90826320300064),         will be fixed after segmentation correction (catheter is segmented too wide)
-('2529895_LCA_-30_1', 75.31268153505093),       will be fixed after segmentation correction (catheter is not segmented until the end)
 ('G18_RCA_-30_1', 76.94153624668537),           won't fix (superimposed vessel passes right at the catheter's curve)
-('P31_LCA_90_0', 77.41446893184762),            should be fixed after segmentation correction (false positive on crossing detection)
 ('P22_LCA_-30_-26', 81.41252974819048),         won't fix (no contrast agent in ostium)
-('G9_LCA_10_40', 82.96987405076617),            should be fixed after segmentation correction (badly segmented cathter)
 ('2043628_LCA_90_0', 94.64142856064674),        won't fix (catheter is superimposed to the vessel)
 ('2381613_RCA_90_0_1', 97.74456506629922),      won't fix (disconnected catheter far from ostium)
-('G12_LCA_-9_40', 102.45974819410792),          should be fixed after segmentation correction (ostium is not even segmented)
 ('1933060_LCA_90_0_3', 106.6770828247567),      won't fix (catheter is superimposed to the vessel)
 ('2204757_RCA_0_0', 109.41663493271945),        won't fix (catheter is superimposed to the vessel)
-('KD4_LCA_-30_-1', 113.718951806636),           will be fixed after segmentation correction (contrast agent in the aorta is segmented and its pixel intensity is slightly greater than one of the two catheter segments)
 ('2179600_LCA_30_-25', 114.54256850621083),     won't fix (detached catheter that moved out of place)
-('G1_LCA_90_0', 166.35203635663737),            won't fix (badly segmented catheter that is also superimposed multiple vessels)
-('2279417_RCA_90_0', 191.4627901186024),        will be fixed after segmentation correction (catheter with variying segmentation width)
-('P28_LCA_65_-20', 249.24285345822858)]         might be fixed after segmentation correction (disconnected catheter before crossing)
-average: 42.32949980207055px
+('G1_LCA_90_0', 131.01526628603247)]            won't fix (catheter is superimposed to multiple vessels)
+average: 29.471578044360715px

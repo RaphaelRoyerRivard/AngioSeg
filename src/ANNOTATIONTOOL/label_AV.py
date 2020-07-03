@@ -108,6 +108,10 @@ class AVMainWindow(QtGui.QMainWindow):
         self.setwidth10cat.setStatusTip('Width10')
         self.setwidth10cat.triggered.connect(self.setpenwidth10cat)
 
+        self.setwidth5eraser = QtGui.QAction(QtGui.QIcon('icon/width10.png'), 'Width10 eraser', self, visible=True, checkable=True)
+        self.setwidth5eraser.setStatusTip('Width10Eraser')
+        self.setwidth5eraser.triggered.connect(self.setpenwidth5eraser)
+
 
         self.getnext = QtGui.QAction(QtGui.QIcon('icon/next.png'), 'Next File', self, visible=True)
         self.getnext.setStatusTip('Next File')
@@ -189,6 +193,7 @@ class AVMainWindow(QtGui.QMainWindow):
         self.toolbar2.addAction(self.setwidth10)
         self.toolbar2.addAction(self.setwidth5)
         self.toolbar2.addAction(self.setwidth10cat)
+        self.toolbar2.addAction(self.setwidth5eraser)
 
         menufordisplay=QtGui.QMenu()
         menufordisplay.addAction(self.getdispimage)
@@ -905,6 +910,8 @@ class AVMainWindow(QtGui.QMainWindow):
         self.setwidth5.setCheckable(False)
         self.setwidth10.setCheckable(False)
         self.setwidth15.setCheckable(False)
+        self.setwidth10cat.setCheckable(False)
+        self.setwidth5eraser.setCheckable(False)
 
     def setpenwidth15(self):
         self.canvas.nodeProxy.widget().myPenWidth = 15
@@ -912,6 +919,8 @@ class AVMainWindow(QtGui.QMainWindow):
         self.setwidth5.setCheckable(False)
         self.setwidth10.setCheckable(False)
         self.setwidth20.setCheckable(False)
+        self.setwidth10cat.setCheckable(False)
+        self.setwidth5eraser.setCheckable(False)
 
     def setpenwidth10(self):
         self.canvas.nodeProxy.widget().myPenWidth = 8
@@ -919,6 +928,8 @@ class AVMainWindow(QtGui.QMainWindow):
         self.setwidth5.setCheckable(False)
         self.setwidth15.setCheckable(False)
         self.setwidth20.setCheckable(False)
+        self.setwidth10cat.setCheckable(False)
+        self.setwidth5eraser.setCheckable(False)
 
 
     def setpenwidth5(self):
@@ -927,14 +938,27 @@ class AVMainWindow(QtGui.QMainWindow):
         self.setwidth10.setCheckable(False)
         self.setwidth15.setCheckable(False)
         self.setwidth20.setCheckable(False)
+        self.setwidth10cat.setCheckable(False)
+        self.setwidth5eraser.setCheckable(False)
 
     def setpenwidth10cat(self):
-        self.canvas.nodeProxy.widget().myPenWidth = 12
-        self.canvas.nodeProxy.widget().setPenColor =  QtGui.QColor(0,255,0,255)
+        self.canvas.nodeProxy.widget().myPenWidth = 10
+        self.canvas.nodeProxy.widget().setPenColor = QtGui.QColor(0, 255, 0, 255)
         self.setwidth5.setCheckable(False)
         self.setwidth10.setCheckable(False)
         self.setwidth15.setCheckable(False)
         self.setwidth20.setCheckable(False)
+        self.setwidth5eraser.setCheckable(False)
+
+    def setpenwidth5eraser(self):
+        self.canvas.nodeProxy.widget().myPenWidth = 5
+        self.canvas.nodeProxy.widget().setPenColor = QtGui.QColor(0, 0, 0, 0)
+        self.setwidth5.setCheckable(False)
+        self.setwidth10.setCheckable(False)
+        self.setwidth15.setCheckable(False)
+        self.setwidth20.setCheckable(False)
+        self.setwidth10cat.setCheckable(False)
+
 
 def main():
     app = QtGui.QApplication(sys.argv)
