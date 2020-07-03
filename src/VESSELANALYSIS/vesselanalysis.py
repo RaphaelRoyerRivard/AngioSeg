@@ -375,7 +375,7 @@ def fill_missing_pixels(image):
             image[np.where(res == 9)] = 1
     image[np.where(image <= 0)] = 0
     
-    return image
+    return image.astype(np.uint8) * 255
 
 
 def find_ostium(raw_image, skeleton_distances, bifurcations):
@@ -579,7 +579,7 @@ class CrossingParams:
         # Invalid if not in the right direction
         angle = get_angle_from_vector(vector, previous_angle=self.angle)
         maximum_angle = 90 - 75 * distance / MAX_CROSSING_DISTANCE
-        print_indented_log(indentation_level, f"Maximum angle = {maximum_angle}", debug)
+        print_indented_log(indentation_level, f"Maximum angle = {maximum_angle}, current = {abs(angle - self.angle)}", debug)
         if abs(angle - self.angle) > maximum_angle:
             print_indented_log(indentation_level, f"Bifurcation {bifurcation} is not in the right direction (at {angle} degrees for a {abs(angle - self.angle)} degrees difference)", debug)
             return False
