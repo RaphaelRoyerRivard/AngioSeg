@@ -410,7 +410,9 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
                 for potential_catheter_x in current_potential_catheters:
                     # follow the potential catheters to get their average width and variance
                     starting_point = get_catheter_starting_point(potential_catheter_x, image_percent, skeleton_distances)
-                    path_points, ends_on_dead_end = follow_path_bfs(skeleton_distances, bifurcations, starting_point, get_branch_points=True, parent=(potential_catheter_x, image_percent), debug=False)
+                    result_dict = follow_path_bfs(skeleton_distances, bifurcations, starting_point, get_branch_points=True, parent=(potential_catheter_x, image_percent), debug=False)
+                    path_points = result_dict["branch_points"]
+                    ends_on_dead_end = result_dict["dead_end"]
                     path_points = np.array(path_points)
                     if not ends_on_dead_end:
                         last_width = int(round(skeleton_distances[path_points[-1, 1], path_points[-1, 0]]))
@@ -442,68 +444,83 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
     percent = int(skeleton_distances.shape[1] * percent / 100)
 
     print("potential catheters", potential_catheters)
-    # Do the search twice. The first time it will search normally, the second time it will try to find the closest skeleton point from the dead end
-    for i in range(2):
-        if i == 1:
-            print("\nCould not find the ostium connected to the catheter, now trying to find a disconnected catheter to deduce the ostium position")
-        catheter_points = []
-        catheter_tips = []
-        for pixel_x in potential_catheters:
-            print(f"\nTrying for potential catheter at ({pixel_x}, {percent})")
-            starting_point = get_catheter_starting_point(pixel_x, percent, skeleton_distances)
-            if starting_point is None:
-                continue
-            if i == 0:
-                # Normal search for ostium
-                start_time = time.time()
-                ostium_location, parent_location = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=False)
-                print(f"follow_path_bfs took {time.time() - start_time}s")
-                if ostium_location is not None:
-                    print("ostium:", ostium_location, "parent:", parent_location)
-                    return ostium_location, parent_location
-            else:
-                # Get the catheter points to find the tip
-                start_time = time.time()
-                path_points, dead_end = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, get_branch_points=True, allow_crossings=True, parent=(pixel_x, percent), debug=False)
-                print(f"follow_path_bfs took {time.time() - start_time}s")
-                catheter_points += path_points
-                catheter_tip = path_points[-1]
-                catheter_tips.append((catheter_tip[1], catheter_tip[0]))  # from (x, y) to (y, x)
-        if i == 1:
-            start_time = time.time()
-            # Find the catheter tip that is the closest to the center of the image
-            centermost_catheter_tip = ()
-            centermost_catheter_tip_percent = ()
-            for catheter_tip in catheter_tips:
-                dead_end_percent_x = catheter_tip[1] / skeleton_distances.shape[1]
-                dead_end_percent_y = catheter_tip[0] / skeleton_distances.shape[0]
-                # If the tip of the catheter is closer to the center
-                if centermost_catheter_tip == () or abs(dead_end_percent_x - 0.5) + abs(dead_end_percent_y - 0.5) < abs(centermost_catheter_tip_percent[0] - 0.5) + abs(centermost_catheter_tip_percent[1] - 0.5):
-                    centermost_catheter_tip = catheter_tip
-                    centermost_catheter_tip_percent = (dead_end_percent_x, dead_end_percent_y)
+    ostium_location = None
+    ostium_location_parent = None
+    catheter_points = []
+    catheter_tips = []
+    for pixel_x in potential_catheters:
+        print(f"\nTrying for potential catheter at ({pixel_x}, {percent})")
+        starting_point = get_catheter_starting_point(pixel_x, percent, skeleton_distances)
+        if starting_point is None:
+            print(f"Skipping {pixel_x}")
+            continue
+        # if i == 0:
+        #     # Normal search for ostium
+        #     start_time = time.time()
+        #     result_dict = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, parent=(pixel_x, percent), debug=False)
+        #     ostium_location = result_dict["ostium_location"]
+        #     parent_location = result_dict["ostium_location_parent"]
+        #     print(f"follow_path_bfs took {time.time() - start_time}s")
+        #     if ostium_location is not None:
+        #         print("ostium:", ostium_location, "parent:", parent_location)
+        #         return ostium_location, parent_location
+        # else:
+        # Get the catheter points to find the tip
+        start_time = time.time()
+        result_dict = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, get_branch_points=True, allow_crossings=True, parent=(pixel_x, percent), debug=False)
+        if ostium_location is None:
+            ostium_location = result_dict["ostium_location"]
+            ostium_location_parent = result_dict["ostium_location_parent"]
+        path_points = result_dict["branch_points"]
+        dead_end = result_dict["dead_end"]
+        print(f"follow_path_bfs took {time.time() - start_time}s")
+        catheter_points += path_points
+        catheter_tip = path_points[-1]
+        catheter_tips.append((catheter_tip[1], catheter_tip[0]))  # from (x, y) to (y, x)
 
-            # We remove the catheter points from the skeleton
-            skeleton_copy = skeleton_distances[:]
-            catheter_points = np.array(catheter_points, dtype=np.int16)
-            bifurcation_catheter_points = catheter_points[bifurcations[catheter_points[:, 1], catheter_points[:, 0]] > 0]
-            # remove bifurcation points from catheter_points
-            catheter_points = catheter_points[np.where(bifurcations[catheter_points[:, 1], catheter_points[:, 0]] == 0)]
-            # remove bifurcation points from bifurcations
-            bifurcations[bifurcation_catheter_points[:, 1], bifurcation_catheter_points[:, 0]] = 0
-            skeleton_copy[catheter_points[:, 1], catheter_points[:, 0]] = 0
-            skeleton_points = np.where(skeleton_copy > 0)
-            skeleton_points = np.array([skeleton_points[0], skeleton_points[1]])
-            centermost_catheter_tip = np.array(centermost_catheter_tip)
-            distances = np.linalg.norm(skeleton_points - centermost_catheter_tip[:, None], axis=0)
-            adjusted_distances = distances - skeleton_distances[skeleton_points[0, :], skeleton_points[1, :]] * 2  # Adjusting the distances by removing twice the vessel width
-            min_adjusted_distance_idx = adjusted_distances.argmin()
-            closest_point = skeleton_points[:, min_adjusted_distance_idx]
-            ostium_location = (closest_point[1], closest_point[0])  # (x, y)
-            print(f"Finding ostium location from catheter tips took {time.time() - start_time}s")
-            print("Guessed ostium location from detached catheter tip:", ostium_location)
-            return ostium_location, None
+    # skeleton_copy = skeleton_distances.copy()
+    skeleton_copy = skeleton_distances
+    catheter_points = np.array(catheter_points, dtype=np.int16)
+    remove_catheter_points(catheter_points, skeleton_copy, bifurcations)
 
-    return None, None
+    if ostium_location is not None:
+        return ostium_location, ostium_location_parent
+
+    print("\nCould not find the ostium connected to the catheter, now trying to find a disconnected catheter to deduce the ostium position")
+    start_time = time.time()
+    # Find the catheter tip that is the closest to the center of the image
+    centermost_catheter_tip = ()
+    centermost_catheter_tip_percent = ()
+    for catheter_tip in catheter_tips:
+        dead_end_percent_x = catheter_tip[1] / skeleton_distances.shape[1]
+        dead_end_percent_y = catheter_tip[0] / skeleton_distances.shape[0]
+        # If the tip of the catheter is closer to the center
+        if centermost_catheter_tip == () or abs(dead_end_percent_x - 0.5) + abs(dead_end_percent_y - 0.5) < abs(centermost_catheter_tip_percent[0] - 0.5) + abs(centermost_catheter_tip_percent[1] - 0.5):
+            centermost_catheter_tip = catheter_tip
+            centermost_catheter_tip_percent = (dead_end_percent_x, dead_end_percent_y)
+
+    skeleton_points = np.where(skeleton_copy > 0)
+    skeleton_points = np.array([skeleton_points[0], skeleton_points[1]])
+    centermost_catheter_tip = np.array(centermost_catheter_tip)
+    distances = np.linalg.norm(skeleton_points - centermost_catheter_tip[:, None], axis=0)
+    adjusted_distances = distances - skeleton_distances[skeleton_points[0, :], skeleton_points[1, :]] * 2  # Adjusting the distances by removing twice the vessel width
+    min_adjusted_distance_idx = adjusted_distances.argmin()
+    closest_point = skeleton_points[:, min_adjusted_distance_idx]
+    ostium_location = (closest_point[1], closest_point[0])  # (x, y)
+    print(f"Finding ostium location from catheter tips took {time.time() - start_time}s")
+    print("Guessed ostium location from detached catheter tip:", ostium_location)
+    return ostium_location, None
+
+
+def remove_catheter_points(catheter_points, skeleton, bifurcations):
+    # We find the bifurcations from the catheter points
+    bifurcation_catheter_points = catheter_points[bifurcations[catheter_points[:, 1], catheter_points[:, 0]] > 0]
+    # We remove bifurcation points from catheter_points
+    catheter_points = catheter_points[np.where(bifurcations[catheter_points[:, 1], catheter_points[:, 0]] == 0)]
+    # We remove bifurcation points from bifurcations
+    bifurcations[bifurcation_catheter_points[:, 1], bifurcation_catheter_points[:, 0]] = 0
+    # We remove the catheter points from the skeleton
+    skeleton[catheter_points[:, 1], catheter_points[:, 0]] = 0
 
 
 def get_catheter_starting_point(x, y, skeleton_distances):
@@ -606,9 +623,12 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
     :param allow_crossings: Used only when get_branch_points is also True. It is a bool that defines if we want to stop at the first bifurcation or allow crossings.
     :param debug: A bool representing if we want to print debug logs or not.
     :return: The return value is different depending on the parameters.
-    - If search_for_ostium is True, returns the location of the ostium if found (alongside of its parent point), otherwise None twice.
     - If search_for_crossing is True, returns True if the first bifurcation encountered is a crossing, otherwise False.
-    - If get_branch_points is True, returns the list of points (x, y) encountered and a bool that tells if the path ended on a dead-end.
+    - If search_for_ostium or get_branch_points is True, returns a dict with multiple values:
+        - "ostium_location": the location (x, y) of the ostium if found, otherwise None. Present only if search_for_ostium is True.
+        - "ostium_location_parent": the location (x, y) of the parent of the ostium if found, otherwise None. Present only if search_for_ostium is True.
+        - "branch_points": the list of points (x, y) encountered. Present only if get_branch_points is True.
+        - "dead_end": a bool that tells if the path ended on a dead-end. Present only if get_branch_points is True.
     """
     check_for_crossings = not get_branch_points or allow_crossings
     parent_node = None if parent is None else PathNode(parent[0], parent[1])
@@ -727,14 +747,26 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 sharp_angle_location, parent_location = get_location_of_sharp_angle(nodes, skeleton_distances.shape, show_graph_only_on_detection=debug)
                                 if sharp_angle_location is not None:
                                     print_indented_log(indentation_level, f"sharp angle location: {sharp_angle_location}", debug)
-                                    return sharp_angle_location, parent_location
+                                    return_dict = {"ostium_location": sharp_angle_location, "ostium_location_parent": parent_location}
+                                    if get_branch_points:
+                                        while path_points[-1] != sharp_angle_location:
+                                            path_points.pop(len(path_points) - 1)
+                                        return_dict["branch_points"] = path_points
+                                        return_dict["dead_end"] = False
+                                    return return_dict
                                 widening_location, parent_location = get_location_of_widening(nodes, vessel_widths, show_graph_only_on_detection=debug)
                                 if widening_location is not None:
                                     # Instead of returning already, we must check if there is a crossing. In that case, the widening might just be caused by the crossing
                                     bifurcation_widening_dist = np.sqrt((widening_location[1] - bifurcation[0]) ** 2 + (widening_location[0] - bifurcation[1]) ** 2)
                                     print_indented_log(indentation_level, f"widening location: {widening_location}, bifurcation width is {skeleton_distances[bifurcation]} and dist is {bifurcation_widening_dist}", debug)
                                     if skeleton_distances[bifurcation] < bifurcation_widening_dist:
-                                        return widening_location, parent_location
+                                        return_dict = {"ostium_location": widening_location, "ostium_location_parent": parent_location}
+                                        if get_branch_points:
+                                            while path_points[-1] != widening_location:
+                                                path_points.pop(len(path_points) - 1)
+                                            return_dict["branch_points"] = path_points
+                                            return_dict["dead_end"] = False
+                                        return return_dict
                             bifurcation_node = PathNode(bifurcation[1], bifurcation[0])
                             # add bifurcation branches to the priority queue
                             _, branches = detect_bifurcation(bifurcation, skeleton_distances)
@@ -778,14 +810,16 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
             heapq.heappush(paths_to_explore, (0, 0, np.random.ranf(), node, crossing_params, path_points_key))
             first_bifurcation_crossing_info = None
 
-    if get_branch_points:
-        return path_points, ends_on_dead_end
-
-    if search_for_ostium:
-        if crossing_params is not None:
+    if get_branch_points or search_for_ostium:
+        return_dict = {}
+        if search_for_ostium:
             # We haven't found a crossing for a bifurcation. We then suppose the ostium is that bifurcation.
-            return (crossing_params.bifurcation_node.x, crossing_params.bifurcation_node.y), (crossing_params.bifurcation_node.parent.x, crossing_params.bifurcation_node.parent.y)
-        return None, None
+            return_dict["ostium_location"] = (crossing_params.bifurcation_node.x, crossing_params.bifurcation_node.y) if crossing_params is not None else None
+            return_dict["ostium_location_parent"] = (crossing_params.bifurcation_node.parent.x, crossing_params.bifurcation_node.parent.y) if crossing_params is not None else None
+        if get_branch_points:
+            return_dict["branch_points"] = path_points
+            return_dict["dead_end"] = ends_on_dead_end
+        return return_dict
 
     if search_for_crossing:
         return False
@@ -1040,17 +1074,6 @@ def vesselanalysis(image, out_name, use_scikit=True):
     start = time.time()
     if use_scikit:
         skeleton, distance = medial_axis(image, return_distance=True)
-        # skeleton = (skeletonize(image, method='lee') / 255).astype(np.uint8)
-        # skeleton2, distance = medial_axis(image, return_distance=True)
-        # skeletons = np.array([skeleton, skeleton2, np.zeros_like(image)])
-        # skeletons = np.moveaxis(skeletons, 0, 2)
-        # print(skeletons.min(), skeletons.max(), skeletons.mean())
-        # plt.imshow(skeleton, vmin=0, vmax=1)
-        # plt.show()
-        # plt.imshow(skeleton2, vmin=0, vmax=1)
-        # plt.show()
-        # plt.imshow(skeletons*255)
-        # plt.show()
         strskel = skeleton.tostring()
     else:
         # 1 get skeleton
@@ -1113,7 +1136,9 @@ def remove_spurs(bifurcation_list, bifurcations_layer, bifurcations, skeleton_di
             _, branches = detect_bifurcation(bifurcation, skeleton_distance)
             for branch in branches:
                 start_point = (bifurcation[1] + branch[1], bifurcation[0] + branch[0])
-                branch_points, ends_on_dead_end = follow_path_bfs(skeleton_distance, bifurcations_layer, starting_point=start_point, parent=(bifurcation[1], bifurcation[0]), get_branch_points=True, debug=False)
+                result_dict = follow_path_bfs(skeleton_distance, bifurcations_layer, starting_point=start_point, parent=(bifurcation[1], bifurcation[0]), get_branch_points=True, debug=False)
+                branch_points = result_dict["branch_points"]
+                ends_on_dead_end = result_dict["dead_end"]
                 if ends_on_dead_end:
                     branch_length = len(branch_points)
                     branch_width = get_average_vessel_width(branch_points, skeleton_distance, real_average=True)
@@ -1287,6 +1312,17 @@ if __name__ == '__main__':
                             evaluation_results[file_name] = distance
                         else:
                             evaluation_results[file_name] = float('inf')
+
+                        # TODO do not keep
+                        # skeleton[skeleton > 0] = 1
+                        # visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
+                        # visualization[:, :, 1] -= bifurcations
+                        # if ostium is not None:
+                        #     visualization[ostium[1], ostium[0], 0] -= 1
+                        # else:
+                        #     print("Ostium not found")
+                        # plt.imshow(visualization)
+                        # plt.show()
 
                 else:
                     image = fill_missing_pixels(image)
