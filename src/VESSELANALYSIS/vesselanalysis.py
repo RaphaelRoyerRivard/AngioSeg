@@ -482,9 +482,14 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
                     centermost_catheter_tip = catheter_tip
                     centermost_catheter_tip_percent = (dead_end_percent_x, dead_end_percent_y)
 
-            # We remove the catether points from the skeleton
+            # We remove the catheter points from the skeleton
             skeleton_copy = skeleton_distances[:]
             catheter_points = np.array(catheter_points, dtype=np.int16)
+            bifurcation_catheter_points = catheter_points[bifurcations[catheter_points[:, 1], catheter_points[:, 0]] > 0]
+            # remove bifurcation points from catheter_points
+            catheter_points = catheter_points[np.where(bifurcations[catheter_points[:, 1], catheter_points[:, 0]] == 0)]
+            # remove bifurcation points from bifurcations
+            bifurcations[bifurcation_catheter_points[:, 1], bifurcation_catheter_points[:, 0]] = 0
             skeleton_copy[catheter_points[:, 1], catheter_points[:, 0]] = 0
             skeleton_points = np.where(skeleton_copy > 0)
             skeleton_points = np.array([skeleton_points[0], skeleton_points[1]])
@@ -690,7 +695,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                     first_bifurcation_crossing_info = None
                                 # Add the path points of the previously explored paths based on the bifurcations
                                 parent_bifurcation, branch = path_points_key
-                                crossing_path_points = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
+                                # crossing_path_points = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
                                 # print(f"Need to find crossing params bifurcation ({crossing_params.bifurcation_node.y}, {crossing_params.bifurcation_node.x})")
                                 # print(f"all_paths_points: {all_paths_points}")
                                 # print(f"parent_bifurcation and branch: {path_points_key}")
@@ -700,7 +705,9 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 #     parent_bifurcation, branch = parent_paths[parent_bifurcation]
                                 #     path_points_to_add = list(reversed(all_paths_points[(parent_bifurcation, branch)]))
                                 #     crossing_path_points += path_points_to_add
-                                path_points += list(reversed(crossing_path_points))
+                                # path_points += list(reversed(crossing_path_points))
+                                path_points.append((parent_bifurcation[1], parent_bifurcation[0]))
+                                path_points += all_paths_points[(parent_bifurcation, branch)]
                                 crossing_params = None
                                 paths_to_explore.clear()
                         else:
