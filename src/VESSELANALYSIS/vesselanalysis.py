@@ -661,7 +661,9 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
             check_for_crossing = check_for_crossings and crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
             if is_bifurcation or check_for_crossing:
                 # compute the direction vector on the last few points to get the vessel angle
-                vector, points = get_vector_and_points_from_end_node(current_node)
+                bifurcation_index = -1 if is_bifurcation else 0
+                bifurcation_width = skeleton_distances[current_node.y, current_node.x] if is_bifurcation else skeleton_distances[path_points_key[0][0], path_points_key[0][1]]
+                vector, points = get_vector_and_points_from_end_node(current_node, bifurcation_index, bifurcation_width)
                 previous_angle = float('inf') if crossing_params is None else crossing_params.angle
                 angle = get_angle_from_vector(vector, previous_angle, debug=False)
                 vessel_width = get_average_vessel_width(points, skeleton_distances)
@@ -887,18 +889,39 @@ def print_indented_log(indentation_level, text, debug):
         print(f"{'    ' * indentation_level}{text}")
 
 
-def get_vector_and_points_from_end_node(end_node, max_node_count=20):
+def get_vector_and_points_from_end_node(end_node, bifurcation_index=-1, bifurcation_width=0, max_node_count=20):
+    """
+    This function returns a direction vector and a list of points from the end node of the segment by weighting the vectors between each point.
+    The weighting is done by giving less importance to vectors between points that are close to the bifurcation (closeness is defined by the bifurcation width).
+    :param end_node: The last node we encountered.
+    :param bifurcation_index: 0 (first) or -1 (last).
+    :param bifurcation_width: The size of the bifurcation (helps with defining which vectors should have less importance).
+    :param max_node_count: The number of nodes we want to consider before stopping checking farther back.
+    :return: The direction vector and the list of points.
+    """
+    vectors = []
     vector = np.array([0, 0])
     points = []
     backtrack_node = end_node
     while backtrack_node is not None and len(points) < max_node_count:
         point = np.array([backtrack_node.x, backtrack_node.y])
         if len(points) > 0:
+            vectors.append(points[-1] - point)
             vector += points[-1] - point
         points.append(point)
         backtrack_node = backtrack_node.parent
+    vectors = np.array(list(reversed(vectors)), dtype=np.float)
+    index = int(np.floor(bifurcation_width))
+    if bifurcation_index == 0:
+        vectors[:index] *= 0.25
+    else:
+        vectors[-index:] *= 0.25
+    weighted_vector = vectors.sum(axis=0)
+    weighted_vector = weighted_vector / np.linalg.norm(weighted_vector)
+    vector = vector / np.linalg.norm(vector)
     points = np.array(list(reversed(points)))
     return vector, points
+    # return weighted_vector, points
 
 
 def get_average_vessel_width(points, skeleton_distances, real_average=False):
@@ -1253,6 +1276,7 @@ if __name__ == '__main__':
         visualization = np.repeat(skeleton[:, :, np.newaxis], 3, 2)
         visualization[:, :, 1] -= bifurcations
         if ostium is not None:
+            print(f"Ostium found at location {ostium}")
             visualization[ostium[1], ostium[0], 0] -= 1
         else:
             print("Ostium not found")
