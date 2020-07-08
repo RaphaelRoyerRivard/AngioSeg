@@ -457,14 +457,15 @@ def find_ostium(raw_image, skeleton_distances, bifurcations):
         # Get the catheter points to find the tip
         start_time = time.time()
         result_dict = follow_path_bfs(skeleton_distances, bifurcations, starting_point, search_for_ostium=True, get_branch_points=True, allow_crossings=True, parent=(pixel_x, percent), debug=False)
+        path_points = result_dict["branch_points"]
+        catheter_tip = path_points[-1]
+        catheter_tips.append((catheter_tip[1], catheter_tip[0]))  # from (x, y) to (y, x)
         if ostium_location is None:
             ostium_location = result_dict["ostium_location"]
             ostium_location_parent = result_dict["ostium_location_parent"]
-        path_points = result_dict["branch_points"]
-        print(f"follow_path_bfs took {time.time() - start_time}s")
+            path_points = path_points[:-1]  # We don't want to remove ostium point
         catheter_points += path_points
-        catheter_tip = path_points[-1]
-        catheter_tips.append((catheter_tip[1], catheter_tip[0]))  # from (x, y) to (y, x)
+        print(f"follow_path_bfs took {time.time() - start_time}s")
     catheter_points = np.array(catheter_points, dtype=np.int16)
 
     if ostium_location is not None:
