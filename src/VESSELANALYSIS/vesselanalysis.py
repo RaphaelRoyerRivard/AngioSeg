@@ -559,7 +559,8 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     start_time = time.time()
     nodes = [ostium]
     adjacent_nodes = {0: []}
-    unexplored_paths = []  # contains tuples (path_start_point, parent_point, parent_node_index)
+    unexplored_paths = []  # heap queue containing tuples (-bifurcation_width, path_start_point, parent_point, parent_node_index)
+    explored_paths = []  # a list of points representing the first and penultimate points of explored paths
     is_bifurcation = bifurcations[ostium[1], ostium[0]] > 0
     print("Ostium is bifurcation ?", is_bifurcation)
     branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
@@ -570,60 +571,91 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     for branch in branches:
         branch_point = (ostium[0] + branch[1], ostium[1] + branch[0])
         if ostium_parent != branch_point:
-            unexplored_paths.append((branch_point, ostium, 0))
+            ostium_branch_width = skeleton_distances[branch_point[1], branch_point[0]]
+            heapq.heappush(unexplored_paths, (-ostium_branch_width, branch_point, ostium, 0))
     step = 0
     # Keep exploring while we still have branches that we didn't go through
     while len(unexplored_paths) > 0:
-        start_point, parent_point, parent_node_index = unexplored_paths.pop(0)
+        _, start_point, parent_point, parent_node_index = heapq.heappop(unexplored_paths)
+        if oriented and start_point in explored_paths:
+            # print("----- PATH ALREADY EXPLORED!!! (1)")
+            continue
         print("following path", start_point, "from parent point", parent_point, "of node", parent_node_index)
         result_dict = follow_path_bfs(skeleton_distances, bifurcations, start_point, parent=parent_point, get_branch_points=True, allow_crossings=oriented, search_best_crossing=search_best_crossing, debug=debug)
         path_points = result_dict["branch_points"]
         end_point = path_points[-1]
         end_point_parent = path_points[-2]
         print("end_point", end_point)
+        if oriented and end_point_parent in explored_paths:
+            # print("----- PATH ALREADY EXPLORED!!! (2)")
+            continue
         # If the branch ended on a new node, we save it
-        if end_point not in nodes:
-            vessel_length = len(path_points)
-            average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
-            path_points = np.array(path_points)
-            intensities = raw_image[path_points[:, 1], path_points[:, 0]]
-            average_pixel_intensity = intensities.mean()
-            # print("vessel_length", vessel_length)
-            # print("average_vessel_width", average_vessel_width)
-            # print("average_pixel_intensity", average_pixel_intensity)
+        already_explored_node = end_point in nodes
+        vessel_length = len(path_points)
+        average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
+        path_points = np.array(path_points)
+        intensities = raw_image[path_points[:, 1], path_points[:, 0]]
+        average_pixel_intensity = intensities.mean()
+        # print("vessel_length", vessel_length)
+        # print("average_vessel_width", average_vessel_width)
+        # print("average_pixel_intensity", average_pixel_intensity)
+
+        # If there is already an edge between those two nodes and we are creating an oriented graph, we want to skip it
+        already_existing_connection = False
+        if oriented and already_explored_node:
+            parent_node_indices = [i for i, x in enumerate(nodes) if x == parent_point]
+            end_node_indices = [i for i, x in enumerate(nodes) if x == end_point]
+            for parent_node_id in parent_node_indices:
+                for end_node_id in end_node_indices:
+                    if end_node_id in adjacent_nodes[parent_node_id] or parent_node_id in adjacent_nodes[end_node_id]:
+                        # print("----- THERE IS ALREADY A CONNECTION!!!")
+                        already_existing_connection = True
+                        break
+                if already_existing_connection:
+                    break
+            if oriented and already_existing_connection:
+                continue
+
+        explored_paths.append(start_point)
+        explored_paths.append(end_point_parent)
+        # If we are creating an oriented graph or if the node is new, we want to add it to the list of nodes
+        if oriented or not already_explored_node:
             nodes.append(end_point)
             end_point_index = len(nodes) - 1
             adjacent_nodes[end_point_index] = []
-            adjacent_nodes[parent_node_index].append(end_point_index)
-            is_bifurcation = bifurcations[end_point[1], end_point[0]] > 0
-            print("is_bifurcation", is_bifurcation)
-            # If the new node is a bifurcation, we need to add the other branches to the list of unexplored paths
-            if is_bifurcation:
-                branches = get_branches(end_point[::-1], skeleton_distances, debug=False)
-                for branch in branches:
-                    branch_point = (end_point[0] + branch[1], end_point[1] + branch[0])
-                    if end_point_parent != branch_point:
-                        unexplored_paths.append((branch_point, end_point, nodes.index(end_point)))
-                        print("Adding branch", branch)
-        # If the branch ended on an existing point and we are created a non oriented graph, we still need to save that
-        elif not oriented:
+        # If the branch ended on an existing point and we are created a non oriented graph, we connect the two nodes together
+        else:
             end_point_index = nodes.index(end_point)
             adjacent_nodes[end_point_index].append(parent_node_index)
+        adjacent_nodes[parent_node_index].append(end_point_index)
+        is_bifurcation = bifurcations[end_point[1], end_point[0]] > 0
+        print("is_bifurcation", is_bifurcation)
+        # If the new node is a bifurcation, we need to add the other branches to the list of unexplored paths
+        if not already_explored_node and is_bifurcation:
+            branches = get_branches(end_point[::-1], skeleton_distances, debug=False)
+            for branch in branches:
+                branch_point = (end_point[0] + branch[1], end_point[1] + branch[0])
+                if end_point_parent != branch_point:
+                    heapq.heappush(unexplored_paths, (-skeleton_distances[branch_point[1], branch_point[0]], branch_point, end_point, nodes.index(end_point)))
+                    print("Adding branch", branch)
 
         if debug:
             adjacency_matrix = np.zeros((len(nodes), len(nodes)))
             plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction step " + str(step)
             plt.title(plot_title)
+            plt.imshow(segmented_image)
             for edge_index, adjacent_edges_list in adjacent_nodes.items():
                 adjacency_matrix[edge_index, adjacent_edges_list] = 1
                 if not oriented:
                     adjacency_matrix[adjacent_edges_list, edge_index] = 1
                 for adjacent_edge in adjacent_edges_list:
-                    plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [-nodes[edge_index][1], -nodes[adjacent_edge][1]])
+                    plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
                     if oriented:
                         point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
                         point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
                         plt.scatter(point_position_x, point_position_y, s=10)
+            mng = plt.get_current_fig_manager()
+            mng.window.state('zoomed')
             plt.show()
 
         step += 1
@@ -634,16 +666,17 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     adjacency_matrix = np.zeros((len(nodes), len(nodes)))
     plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction"
     plt.title(plot_title)
+    plt.imshow(segmented_image)
     for edge_index, adjacent_edges_list in adjacent_nodes.items():
         adjacency_matrix[edge_index, adjacent_edges_list] = 1
         if not oriented:
             adjacency_matrix[adjacent_edges_list, edge_index] = 1
         for adjacent_edge in adjacent_edges_list:
-            plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [-nodes[edge_index][1], -nodes[adjacent_edge][1]])
+            plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
             if oriented:
                 point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
                 point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
-                plt.scatter(point_position_x, -point_position_y, s=10)
+                plt.scatter(point_position_x, point_position_y, s=10)
     plt.show()
     plt.title("Adjacency matrix")
     plt.imshow(adjacency_matrix)
@@ -755,7 +788,7 @@ def get_max_crossing_distance(image_size):
     return 100 * image_size / 1024
 
 
-def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=None, search_for_ostium=False, search_for_crossing=False, get_branch_points=False, allow_crossings=False, allow_recursion=True, search_best_crossing=True, debug=False):
+def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=None, search_for_ostium=False, search_for_crossing=False, get_branch_points=False, allow_crossings=False, allow_recursion=True, search_best_crossing=True, default_log_indentation=0, debug=False):
     """
     Follows a path on the skeleton until it reaches a bifurcation or dead-end (or sudden change in vessel width or angle when searching for the ostium).
     :param skeleton_distances: A 2D ndarray containing the skeleton with distances.
@@ -769,6 +802,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
     :param allow_crossings: Used only when get_branch_points is also True. It is a bool that defines if we want to stop at the first bifurcation or allow crossings.
     :param allow_recursion: It is a bool that defines if we should check the other branch has a crossing when we detect a crossing on the first bifurcation.
     :param search_best_crossing: True to keep exploring all valid bifurcations to make sure we choose the best crossing, otherwise we take the first one with detect.
+    :param default_log_indentation: The default number of indentations when printing logs.
     :param debug: A bool representing if we want to print debug logs or not.
     :return: The return value is different depending on the parameters.
     - If search_for_crossing is True, returns True if the first bifurcation encountered is a crossing, otherwise False.
@@ -797,9 +831,9 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
     image_size = skeleton_distances.shape[0]
     while len(paths_to_explore) > 0:  # We still have skeleton segments to explore
         priority, branch_number, random_value, current_node, crossing_params, parent_path_points_key = heapq.heappop(paths_to_explore)
-        print_indented_log(0 if crossing_params is None else 1, f"-> Popping node ({current_node.x}, {current_node.y}) of priority {priority} and branch number {branch_number}, {len(paths_to_explore)} remaining", debug)
+        print_indented_log(default_log_indentation + (0 if crossing_params is None else 1), f"-> Popping node ({current_node.x}, {current_node.y}) of priority {priority} and branch number {branch_number}, {len(paths_to_explore)} remaining", debug)
         if crossing_params is not None:
-            print_indented_log(1, f"crossing params values: angle={crossing_params.angle}, vessel_width={crossing_params.vessel_width}, explored_bifurcations={crossing_params.explored_bifurcations}", debug)
+            print_indented_log(default_log_indentation + 1, f"crossing params values: angle={crossing_params.angle}, vessel_width={crossing_params.vessel_width}, explored_bifurcations={crossing_params.explored_bifurcations}", debug)
         path_points_key = ((current_node.parent.y, current_node.parent.x), branch_number)
         all_paths_points[path_points_key] = []
         nodes_in_path = 0
@@ -810,7 +844,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                 path_points.append((current_node.x, current_node.y))
             all_paths_points[path_points_key].append((current_node.x, current_node.y))
             nodes_in_path += 1
-            indentation_level = 0 if crossing_params is None else 1
+            indentation_level = default_log_indentation + (0 if crossing_params is None else 1)
             is_bifurcation = bifurcations[current_node.y, current_node.x] > 0
             check_for_crossing = check_for_crossings and crossing_params is not None and (nodes_in_path == 20 or (nodes_in_path < 20 and is_bifurcation))
             if is_bifurcation or check_for_crossing:
@@ -824,10 +858,12 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                 if check_for_crossing:
                     angle_diff = abs(angle - crossing_params.angle)
                     vessel_width_ratio = max(crossing_params.vessel_width, vessel_width) / min(crossing_params.vessel_width, vessel_width)
+                    vessel_width_diff = abs(crossing_params.vessel_width - vessel_width)
                     print_indented_log(indentation_level, f"angle difference of {angle_diff} degrees, vessel width {crossing_params.vessel_width} -> {vessel_width} ({int(vessel_width_ratio*1000)/10}%)", debug)
                     max_angle_diff = 30 if search_for_ostium else 25
                     max_vessel_width_ratio = 1.45 if search_for_ostium else 1.35
-                    if angle_diff <= max_angle_diff and vessel_width_ratio <= max_vessel_width_ratio:  # Thresholds are higher for the catheter since we don't want to have false negatives
+                    min_vessel_width_diff = 0 * image_size / 1024  # In case we want to allow a big vessel width ratio when the difference is small (ex. vessels of width 2 and 4)
+                    if angle_diff <= max_angle_diff and (vessel_width_ratio <= max_vessel_width_ratio or vessel_width_diff <= min_vessel_width_diff):  # Thresholds are higher for the catheter since we don't want to have false negatives
                         is_crossing = True
                         # If the crossing was identified on the first bifurcation, it is likely not a crossing, unless we are following a catheter. We need to check if we can find a crossing on the other branch first.
                         if len(crossing_params.explored_bifurcations) == 1 and not search_for_ostium and allow_recursion:
@@ -856,21 +892,22 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                         break
                                     branch_node = PathNode(branch_node.x + next_point[0] - 1, branch_node.y + next_point[1] - 1, parent=branch_node)
                                 # Check if the vessel has a crossing
-                                is_crossing = follow_path_bfs(skeleton_distances, bifurcations, starting_point=(branch_node.parent.x, branch_node.parent.y), parent=(branch_node.x, branch_node.y), search_for_crossing=True, allow_recursion=False, search_best_crossing=search_best_crossing, debug=debug)
+                                is_crossing = follow_path_bfs(skeleton_distances, bifurcations, starting_point=(branch_node.parent.x, branch_node.parent.y), parent=(branch_node.x, branch_node.y), search_for_crossing=True, allow_recursion=False, search_best_crossing=search_best_crossing, default_log_indentation=default_log_indentation+2, debug=debug)
                                 print_indented_log(indentation_level, f"Is first the bifurcation a crossing? {is_crossing}", debug)
                         if is_crossing:
                             if search_for_crossing:
                                 return True  # We only wanted to check if we could find a crossing, so we can return already
                             indentation_level -= 1
                             if search_best_crossing:
-                                crossing_distance = np.sqrt((current_node.x - crossing_params.bifurcation_node.x) ** 2 + (current_node.y - crossing_params.bifurcation_node.y) ** 2)
+                                path_start_point = path_points_key[0]  # (y, x)
+                                crossing_distance = np.sqrt((path_start_point[1] - crossing_params.bifurcation_node.x) ** 2 + (path_start_point[0] - crossing_params.bifurcation_node.y) ** 2)
                                 max_crossing_distance = get_max_crossing_distance(image_size)
                                 angle_score = 1 - angle_diff / max_angle_diff
-                                vessel_width_ratio_score = 1 - vessel_width_ratio / max_vessel_width_ratio
+                                vessel_width_ratio_score = max(1 - vessel_width_ratio / max_vessel_width_ratio, 0)
                                 crossing_distance_score = 1 - crossing_distance / max_crossing_distance
                                 crossing_score = angle_score + vessel_width_ratio_score + crossing_distance_score
                                 if best_crossing is None or crossing_score > best_crossing[0]:
-                                    print(f"Crossing found at ({current_node.x}, {current_node.y}) with a score of {vessel_width_ratio_score} + {crossing_distance_score} + {crossing_score} = {crossing_score}", "and beats the previous one" if best_crossing is not None else "")
+                                    print(f"Crossing found at ({path_start_point[1]}, {path_start_point[0]}) with a score of {angle_score} + {vessel_width_ratio_score} + {crossing_distance_score} = {crossing_score}", "and beats the previous one" if best_crossing is not None else "")
                                     best_crossing = (crossing_score, current_node, path_points_key, all_paths_points[path_points_key].copy())
                             else:
                                 if len(crossing_params.explored_bifurcations) == 1:
