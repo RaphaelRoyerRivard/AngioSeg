@@ -557,6 +557,12 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     :return: The adjacency matrix.
     """
     start_time = time.time()
+
+    # Creating background image for visualization
+    binarized_skeleton = skeleton_distances.copy()
+    binarized_skeleton[binarized_skeleton > 0] = 255
+    background_image = segmented_image + binarized_skeleton
+
     nodes = [ostium]
     adjacent_nodes = {0: []}
     unexplored_paths = []  # heap queue containing tuples (-bifurcation_width, path_start_point, parent_point, parent_node_index)
@@ -643,7 +649,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             adjacency_matrix = np.zeros((len(nodes), len(nodes)))
             plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction step " + str(step)
             plt.title(plot_title)
-            plt.imshow(segmented_image)
+            plt.imshow(background_image)
             for edge_index, adjacent_edges_list in adjacent_nodes.items():
                 adjacency_matrix[edge_index, adjacent_edges_list] = 1
                 if not oriented:
@@ -666,7 +672,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     adjacency_matrix = np.zeros((len(nodes), len(nodes)))
     plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction"
     plt.title(plot_title)
-    plt.imshow(segmented_image)
+    plt.imshow(background_image)
     for edge_index, adjacent_edges_list in adjacent_nodes.items():
         adjacency_matrix[edge_index, adjacent_edges_list] = 1
         if not oriented:
@@ -866,34 +872,40 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                     if angle_diff <= max_angle_diff and (vessel_width_ratio <= max_vessel_width_ratio or vessel_width_diff <= min_vessel_width_diff):  # Thresholds are higher for the catheter since we don't want to have false negatives
                         is_crossing = True
                         # If the crossing was identified on the first bifurcation, it is likely not a crossing, unless we are following a catheter. We need to check if we can find a crossing on the other branch first.
-                        if len(crossing_params.explored_bifurcations) == 1 and not search_for_ostium and allow_recursion:
-                            print_indented_log(indentation_level, "We would have found a crossing, but it is the first bifurcation... Now searching for a crossing from the other bifurcation branch.", debug)
-                            # Backtracking to the bifurcation we think might be a crossing
-                            backtrack_node = current_node.parent
-                            previous_node = current_node
-                            while bifurcations[backtrack_node.y, backtrack_node.x] == 0:
-                                previous_node = backtrack_node
-                                backtrack_node = backtrack_node.parent
-                            bifurcation = (backtrack_node.y, backtrack_node.x)
-                            # Get the branches and find the one that was not taken
-                            branches = get_branches(bifurcation, skeleton_distances)
-                            for b, (branch_y, branch_x) in enumerate(branches):
-                                branch_point = (bifurcation[1] + branch_x, bifurcation[0] + branch_y)
-                                if branch_point[0] == previous_node.x and branch_point[1] == previous_node.y:
-                                    continue  # Skip the current branch
-                                if branch_point[0] == crossing_params.bifurcation_node.parent.x and branch_point[1] == crossing_params.bifurcation_node.parent.y:
-                                    continue  # Skip the parent branch
-                                # The remaining branch is the branch of the vessel that we want to check if it crosses the one we just followed
-                                # We now follow it to its extremity and starts the path following towards the bifurcation we want to identify as a crossing or bifurcation
-                                branch_node = PathNode(branch_point[0], branch_point[1], parent=backtrack_node)
-                                while bifurcations[branch_node.y, branch_node.x] == 0:
-                                    next_point = get_next_path_point(branch_node, skeleton_distances, bifurcations)
-                                    if next_point is None:
-                                        break
-                                    branch_node = PathNode(branch_node.x + next_point[0] - 1, branch_node.y + next_point[1] - 1, parent=branch_node)
-                                # Check if the vessel has a crossing
-                                is_crossing = follow_path_bfs(skeleton_distances, bifurcations, starting_point=(branch_node.parent.x, branch_node.parent.y), parent=(branch_node.x, branch_node.y), search_for_crossing=True, allow_recursion=False, search_best_crossing=search_best_crossing, default_log_indentation=default_log_indentation+2, debug=debug)
-                                print_indented_log(indentation_level, f"Is first the bifurcation a crossing? {is_crossing}", debug)
+                        if len(crossing_params.explored_bifurcations) == 1 and not search_for_ostium:
+                            # If we are already checking for a crossing in the other branch, we don't want to detect a crossing on the same branch we found the potential crossing, we need to check farther
+                            if search_for_crossing:
+                                is_crossing = False
+                            elif allow_recursion:
+                                print_indented_log(indentation_level, "We would have found a crossing, but it is the first bifurcation... Now searching for a crossing from the other bifurcation branch.", debug)
+                                # Backtracking to the bifurcation we think might be a crossing
+                                backtrack_node = current_node.parent
+                                previous_node = current_node
+                                while bifurcations[backtrack_node.y, backtrack_node.x] == 0:
+                                    previous_node = backtrack_node
+                                    backtrack_node = backtrack_node.parent
+                                bifurcation = (backtrack_node.y, backtrack_node.x)
+                                print_indented_log(indentation_level, f"Backtracked from {(current_node.x, current_node.y)} to {(backtrack_node.x, backtrack_node.y)}", debug)
+                                # Get the branches and find the one that was not taken
+                                branches = get_branches(bifurcation, skeleton_distances)
+                                for b, (branch_y, branch_x) in enumerate(branches):
+                                    branch_point = (bifurcation[1] + branch_x, bifurcation[0] + branch_y)
+                                    if branch_point[0] == previous_node.x and branch_point[1] == previous_node.y:
+                                        continue  # Skip the current branch
+                                    if branch_point[0] == crossing_params.bifurcation_node.parent.x and branch_point[1] == crossing_params.bifurcation_node.parent.y:
+                                        continue  # Skip the parent branch
+                                    # The remaining branch is the branch of the vessel that we want to check if it crosses the one we just followed
+                                    # We now follow it to its extremity and starts the path following towards the bifurcation we want to identify as a crossing or bifurcation
+                                    branch_node = PathNode(branch_point[0], branch_point[1], parent=backtrack_node)
+                                    while bifurcations[branch_node.y, branch_node.x] == 0:
+                                        next_point = get_next_path_point(branch_node, skeleton_distances, bifurcations)
+                                        if next_point is None:
+                                            break
+                                        branch_node = PathNode(branch_node.x + next_point[0] - 1, branch_node.y + next_point[1] - 1, parent=branch_node)
+                                    print_indented_log(indentation_level, f"Checking on branch with starting point {(branch_node.parent.x, branch_node.parent.y)}", debug)
+                                    # Check if the vessel has a crossing
+                                    is_crossing = follow_path_bfs(skeleton_distances, bifurcations, starting_point=(branch_node.parent.x, branch_node.parent.y), parent=(branch_node.x, branch_node.y), search_for_crossing=True, allow_recursion=False, search_best_crossing=search_best_crossing, default_log_indentation=default_log_indentation+2, debug=debug)
+                                    print_indented_log(indentation_level, f"Is first the bifurcation a crossing? {is_crossing}", debug)
                         if is_crossing:
                             if search_for_crossing:
                                 return True  # We only wanted to check if we could find a crossing, so we can return already
@@ -907,7 +919,7 @@ def follow_path_bfs(skeleton_distances, bifurcations, starting_point, parent=Non
                                 crossing_distance_score = 1 - crossing_distance / max_crossing_distance
                                 crossing_score = angle_score + vessel_width_ratio_score + crossing_distance_score
                                 if best_crossing is None or crossing_score > best_crossing[0]:
-                                    print(f"Crossing found at ({path_start_point[1]}, {path_start_point[0]}) with a score of {angle_score} + {vessel_width_ratio_score} + {crossing_distance_score} = {crossing_score}", "and beats the previous one" if best_crossing is not None else "")
+                                    print_indented_log(indentation_level, f"Crossing found at ({path_start_point[1]}, {path_start_point[0]}) with a score of {angle_score} + {vessel_width_ratio_score} + {crossing_distance_score} = {crossing_score}" + (" and beats the previous one" if best_crossing is not None else ""), debug)
                                     best_crossing = (crossing_score, current_node, path_points_key, all_paths_points[path_points_key].copy())
                             else:
                                 if len(crossing_params.explored_bifurcations) == 1:
