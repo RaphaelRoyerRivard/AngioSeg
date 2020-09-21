@@ -544,7 +544,7 @@ def find_ostium(raw_image, skeleton_distances, bifurcations, search_best_crossin
     return None, None
 
 
-def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium_parent, oriented=False, search_best_crossing=True, debug=False):
+def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium_parent, oriented=False, search_best_crossing=True, show_final_graph=False, debug=False):
     """
     Extracts the skeleton graph by following the skeleton segments starting from the ostium.
     :param skeleton_distances: The 2D array containing the skeleton distances (y, x).
@@ -553,6 +553,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     :param ostium_parent: The location of the point parent of the ostium (x, y).
     :param oriented: True to extract the graph in an oriented fashion, starting from the ostium.
     :param search_best_crossing: Used when following paths. True to keep exploring all valid bifurcations to make sure we choose the best crossing, otherwise we take the first one with detect.
+    :param show_final_graph: True to show final graph with lines on the segmented image.
     :param debug: True to show debug logs.
     :return: The adjacency matrix (dict composed of node ids as keys and lists of node ids as values),
              the node features (dict composed of node ids as keys and tuple of (position_x, position_y, vessel_width, pixel_intensity, is_ostium) as values),
@@ -572,18 +573,15 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     unexplored_paths = []  # heap queue containing tuples (-bifurcation_width, path_start_point, parent_point, parent_node_index)
     explored_paths = []  # a list of points representing the first and penultimate points of explored paths
     all_node_features[0] = get_node_features(ostium, 0, skeleton_distances)
-    is_bifurcation = bifurcations[ostium[1], ostium[0]] > 0
-    print("Ostium is bifurcation ?", is_bifurcation)
-    branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
-    print("ostium", ostium)
-    print("ostium_parent", ostium_parent)
-    print("branches", branches)
+
     # Adding branches that start from the ostium
+    branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
     for branch in branches:
         branch_point = (ostium[0] + branch[1], ostium[1] + branch[0])
         if ostium_parent != branch_point:
             ostium_branch_width = skeleton_distances[branch_point[1], branch_point[0]]
             heapq.heappush(unexplored_paths, (-ostium_branch_width, branch_point, ostium, 0))
+
     step = 0
     # Keep exploring while we still have branches that we didn't go through
     while len(unexplored_paths) > 0:
@@ -591,12 +589,12 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
         if oriented and start_point in explored_paths:
             # print("----- PATH ALREADY EXPLORED!!! (1)")
             continue
-        print("following path", start_point, "from parent point", parent_point, "of node", parent_node_index)
+        # print("following path", start_point, "from parent point", parent_point, "of node", parent_node_index)
         result_dict = follow_path_bfs(skeleton_distances, bifurcations, start_point, parent=parent_point, get_branch_points=True, allow_crossings=oriented, search_best_crossing=search_best_crossing, debug=debug)
         path_points = result_dict["branch_points"]
         end_point = path_points[-1]
         end_point_parent = path_points[-2]
-        print("end_point", end_point)
+        # print("end_point", end_point)
         if oriented and end_point_parent in explored_paths:
             # print("----- PATH ALREADY EXPLORED!!! (2)")
             continue
@@ -639,7 +637,6 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             all_edge_features[(end_point_index, parent_node_index)] = edge_features
 
         is_bifurcation = bifurcations[end_point[1], end_point[0]] > 0
-        print("is_bifurcation", is_bifurcation)
         # If the new node is a bifurcation, we need to add the other branches to the list of unexplored paths
         if not already_explored_node and is_bifurcation:
             branches = get_branches(end_point[::-1], skeleton_distances, debug=False)
@@ -647,7 +644,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
                 branch_point = (end_point[0] + branch[1], end_point[1] + branch[0])
                 if end_point_parent != branch_point:
                     heapq.heappush(unexplored_paths, (-skeleton_distances[branch_point[1], branch_point[0]], branch_point, end_point, nodes.index(end_point)))
-                    print("Adding branch", branch)
+                    # print("Adding branch", branch)
 
         if debug:
             adjacency_matrix = np.zeros((len(nodes), len(nodes)))
@@ -670,31 +667,41 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
 
         step += 1
 
-    print(f"follow_path_bfs took {time.time() - start_time}s")
-    print("nodes", nodes)
-    print("adjacent_nodes", adjacent_nodes)
-    print("all_node_features", all_node_features)
-    print("all_edge_features", all_edge_features)
-    plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction"
-    plt.title(plot_title)
-    plt.imshow(background_image)
+    if debug:
+        print(f"follow_path_bfs took {time.time() - start_time}s")
+        print("nodes", nodes)
+        print("adjacent_nodes", adjacent_nodes)
+        print("all_node_features", all_node_features)
+        print("all_edge_features", all_edge_features)
+
+    if show_final_graph:
+        plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction"
+        plt.title(plot_title)
+        plt.imshow(background_image)
+
     # Create the adjacency matrix
     adjacency_matrix = np.zeros((len(nodes), len(nodes)))
     for edge_index, adjacent_edges_list in adjacent_nodes.items():
         adjacency_matrix[edge_index, adjacent_edges_list] = 1
         if not oriented:
             adjacency_matrix[adjacent_edges_list, edge_index] = 1
-        # Plot the edges
-        for adjacent_edge in adjacent_edges_list:
-            plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
-            if oriented:
-                point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
-                point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
-                plt.scatter(point_position_x, point_position_y, s=10)
-    plt.show()
-    plt.title("Adjacency matrix")
-    plt.imshow(adjacency_matrix)
-    plt.show()
+
+        if show_final_graph:
+            # Plot the edges
+            for adjacent_edge in adjacent_edges_list:
+                plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
+                if oriented:
+                    point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
+                    point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
+                    plt.scatter(point_position_x, point_position_y, s=10)
+
+    if show_final_graph:
+        plt.show()
+
+        plt.title("Adjacency matrix")
+        plt.imshow(adjacency_matrix)
+        plt.show()
+
     return adjacency_matrix, all_node_features, all_edge_features
 
 
@@ -1594,7 +1601,7 @@ if __name__ == '__main__':
         if ostium is not None:
             print(f"Ostium found at location {ostium}, parent is {ostium_parent}")
             if extract_graph:
-                adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, debug=debug)
+                adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, show_final_graph=True, debug=debug)
         else:
             print("Ostium not found")
         skeleton[skeleton > 0] = 1
