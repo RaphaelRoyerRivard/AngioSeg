@@ -565,8 +565,11 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
 
     nodes = [ostium]
     adjacent_nodes = {0: []}
+    all_edge_features = {}  # (node_a, node_b): (vessel_length, average_vessel_width, average_pixel_intensity)
+    all_node_features = {}  # node: (position_x, position_y, vessel_width, pixel_intensity, is_ostium)
     unexplored_paths = []  # heap queue containing tuples (-bifurcation_width, path_start_point, parent_point, parent_node_index)
     explored_paths = []  # a list of points representing the first and penultimate points of explored paths
+    all_node_features[0] = get_node_features(ostium, 0, skeleton_distances)
     is_bifurcation = bifurcations[ostium[1], ostium[0]] > 0
     print("Ostium is bifurcation ?", is_bifurcation)
     branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
@@ -595,18 +598,9 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
         if oriented and end_point_parent in explored_paths:
             # print("----- PATH ALREADY EXPLORED!!! (2)")
             continue
-        # If the branch ended on a new node, we save it
-        already_explored_node = end_point in nodes
-        vessel_length = len(path_points)
-        average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
-        path_points = np.array(path_points)
-        intensities = raw_image[path_points[:, 1], path_points[:, 0]]
-        average_pixel_intensity = intensities.mean()
-        # print("vessel_length", vessel_length)
-        # print("average_vessel_width", average_vessel_width)
-        # print("average_pixel_intensity", average_pixel_intensity)
 
         # If there is already an edge between those two nodes and we are creating an oriented graph, we want to skip it
+        already_explored_node = end_point in nodes
         already_existing_connection = False
         if oriented and already_explored_node:
             parent_node_indices = [i for i, x in enumerate(nodes) if x == parent_point]
@@ -622,6 +616,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             if oriented and already_existing_connection:
                 continue
 
+        # Save the new connection to prevent other paths from ending on it
         explored_paths.append(start_point)
         explored_paths.append(end_point_parent)
         # If we are creating an oriented graph or if the node is new, we want to add it to the list of nodes
@@ -629,11 +624,23 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             nodes.append(end_point)
             end_point_index = len(nodes) - 1
             adjacent_nodes[end_point_index] = []
-        # If the branch ended on an existing point and we are created a non oriented graph, we connect the two nodes together
+            all_node_features[end_point_index] = get_node_features(end_point, end_point_index, skeleton_distances)
+        # If the branch ended on an existing point and we are creating a non oriented graph, we connect the two nodes together
         else:
             end_point_index = nodes.index(end_point)
             adjacent_nodes[end_point_index].append(parent_node_index)
         adjacent_nodes[parent_node_index].append(end_point_index)
+
+        vessel_length = len(path_points)  # TODO make sure all path points are in that list
+        average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
+        path_points = np.array(path_points)
+        intensities = raw_image[path_points[:, 1], path_points[:, 0]]
+        average_pixel_intensity = intensities.mean()
+        edge_features = (vessel_length, average_vessel_width, average_pixel_intensity)
+        all_edge_features[(parent_node_index, end_point_index)] = edge_features
+        if not oriented:
+            all_edge_features[(end_point_index, parent_node_index)] = edge_features
+
         is_bifurcation = bifurcations[end_point[1], end_point[0]] > 0
         print("is_bifurcation", is_bifurcation)
         # If the new node is a bifurcation, we need to add the other branches to the list of unexplored paths
@@ -669,14 +676,18 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     print(f"follow_path_bfs took {time.time() - start_time}s")
     print("nodes", nodes)
     print("adjacent_nodes", adjacent_nodes)
-    adjacency_matrix = np.zeros((len(nodes), len(nodes)))
+    print("all_node_features", all_node_features)
+    print("all_edge_features", all_edge_features)
     plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction"
     plt.title(plot_title)
     plt.imshow(background_image)
+    # Create the adjacency matrix
+    adjacency_matrix = np.zeros((len(nodes), len(nodes)))
     for edge_index, adjacent_edges_list in adjacent_nodes.items():
         adjacency_matrix[edge_index, adjacent_edges_list] = 1
         if not oriented:
             adjacency_matrix[adjacent_edges_list, edge_index] = 1
+        # Plot the edges
         for adjacent_edge in adjacent_edges_list:
             plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
             if oriented:
@@ -688,6 +699,15 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     plt.imshow(adjacency_matrix)
     plt.show()
     return adjacency_matrix
+
+
+def get_node_features(end_point, end_point_index, skeleton_distances):
+    position_x = end_point[0] / skeleton_distances.shape[1]
+    position_y = end_point[1] / skeleton_distances.shape[0]
+    vessel_width = skeleton_distances[end_point[1], end_point[0]]
+    pixel_intensity = raw_image[end_point[1], end_point[0]]
+    is_ostium = end_point_index == 0
+    return position_x, position_y, vessel_width, pixel_intensity, is_ostium
 
 
 def remove_catheter_points(catheter_points, skeleton, bifurcations):
