@@ -554,7 +554,9 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     :param oriented: True to extract the graph in an oriented fashion, starting from the ostium.
     :param search_best_crossing: Used when following paths. True to keep exploring all valid bifurcations to make sure we choose the best crossing, otherwise we take the first one with detect.
     :param debug: True to show debug logs.
-    :return: The adjacency matrix.
+    :return: The adjacency matrix (dict composed of node ids as keys and lists of node ids as values),
+             the node features (dict composed of node ids as keys and tuple of (position_x, position_y, vessel_width, pixel_intensity, is_ostium) as values),
+             and the edge features (dict composed of tuples of (id of node A, id of node B) as keys and tuple of (vessel_length, average_vessel_width, average_pixel_intensity) as values).
     """
     start_time = time.time()
 
@@ -631,12 +633,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             adjacent_nodes[end_point_index].append(parent_node_index)
         adjacent_nodes[parent_node_index].append(end_point_index)
 
-        vessel_length = len(path_points)  # TODO make sure all path points are in that list
-        average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
-        path_points = np.array(path_points)
-        intensities = raw_image[path_points[:, 1], path_points[:, 0]]
-        average_pixel_intensity = intensities.mean()
-        edge_features = (vessel_length, average_vessel_width, average_pixel_intensity)
+        edge_features = get_edge_features(path_points, skeleton_distances)
         all_edge_features[(parent_node_index, end_point_index)] = edge_features
         if not oriented:
             all_edge_features[(end_point_index, parent_node_index)] = edge_features
@@ -698,7 +695,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     plt.title("Adjacency matrix")
     plt.imshow(adjacency_matrix)
     plt.show()
-    return adjacency_matrix
+    return adjacency_matrix, all_node_features, all_edge_features
 
 
 def get_node_features(end_point, end_point_index, skeleton_distances):
@@ -708,6 +705,15 @@ def get_node_features(end_point, end_point_index, skeleton_distances):
     pixel_intensity = raw_image[end_point[1], end_point[0]]
     is_ostium = end_point_index == 0
     return position_x, position_y, vessel_width, pixel_intensity, is_ostium
+
+
+def get_edge_features(path_points, skeleton_distances):
+    vessel_length = len(path_points)  # TODO make sure all path points are in that list
+    average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
+    path_points = np.array(path_points)
+    intensities = raw_image[path_points[:, 1], path_points[:, 0]]
+    average_pixel_intensity = intensities.mean()
+    return vessel_length, average_vessel_width, average_pixel_intensity
 
 
 def remove_catheter_points(catheter_points, skeleton, bifurcations):
@@ -1517,6 +1523,25 @@ def overlap(image, segmentation_image, skeleton, bifurcations, out_name):
     cv2.imwrite(out_name, rgb_image)
 
 
+def get_graph_data_from_raw_image_and_segmentation(raw_image_path, segmented_image_path, oriented):
+    """
+    This method loads the raw and segmented images and extract graph data from the skeleton after identifying the ostium.
+    :param raw_image_path: Path of the raw image.
+    :param segmented_image_path: Path of the segmented image.
+    :param oriented: True for getting data of an oriented graph, False for a non oriented graph (where crossings are not identified, thus having many more nodes and shorter edges).
+    :return: The adjacency matrix, node features and edge features.
+    """
+    raw_image = cv2.imread(raw_image_path, cv2.IMREAD_GRAYSCALE)
+    segmented_image = cv2.imread(segmented_image_path, cv2.IMREAD_GRAYSCALE)
+    segmented_image = fill_missing_pixels(segmented_image)
+    skeleton, bifurcations = vesselanalysis(segmented_image, f"{file_name}_skeleton")
+    ostium, ostium_parent = find_ostium(raw_image, skeleton, bifurcations, debug=False)
+    if ostium is None:
+        raise Exception(f"Failed to detect the ostium from raw image {raw_image_path} and segmented image {segmented_image_path}.")
+    adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, debug=False)
+    return adjacency_matrix, node_features, edge_features
+
+
 if __name__ == '__main__':
     """
     To create the overlap image in a folder that has an angiography image and a segmentation image with the same name + "_seg", use these command line parameters:
@@ -1565,12 +1590,11 @@ if __name__ == '__main__':
         raw_image = cv2.imread(raw_image_file_name, cv2.IMREAD_GRAYSCALE)
         segmented_image = fill_missing_pixels(segmented_image)
         skeleton, bifurcations = vesselanalysis(segmented_image, f"{file_name}_skeleton")
-        print(skeleton.max())
         ostium, ostium_parent = find_ostium(raw_image, skeleton, bifurcations, search_best_crossing=search_best_crossing, debug=debug)
         if ostium is not None:
             print(f"Ostium found at location {ostium}, parent is {ostium_parent}")
             if extract_graph:
-                adjacency_matrix = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, debug=debug)
+                adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, debug=debug)
         else:
             print("Ostium not found")
         skeleton[skeleton > 0] = 1
