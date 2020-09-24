@@ -544,9 +544,11 @@ def find_ostium(raw_image, skeleton_distances, bifurcations, search_best_crossin
     return None, None
 
 
-def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium_parent, oriented=False, search_best_crossing=True, show_final_graph=False, debug=False):
+def extract_graph_from_skeleton(raw_image, segmented_image, skeleton_distances, bifurcations, ostium, ostium_parent, oriented=False, search_best_crossing=True, show_final_graph=False, debug=False):
     """
     Extracts the skeleton graph by following the skeleton segments starting from the ostium.
+    :param raw_image: The 2D array containing the x-ray image (y, x).
+    :param segmented_image: The 2D array containing the binarized segmentation (y, x).
     :param skeleton_distances: The 2D array containing the skeleton distances (y, x).
     :param bifurcations: The 2D array containing the bifurcations (y, x).
     :param ostium: The location of the ostium point (x, y).
@@ -555,9 +557,9 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     :param search_best_crossing: Used when following paths. True to keep exploring all valid bifurcations to make sure we choose the best crossing, otherwise we take the first one with detect.
     :param show_final_graph: True to show final graph with lines on the segmented image.
     :param debug: True to show debug logs.
-    :return: The adjacency matrix (dict composed of node ids as keys and lists of node ids as values),
-             the node features (dict composed of node ids as keys and tuple of (position_x, position_y, vessel_width, pixel_intensity, is_ostium) as values),
-             and the edge features (dict composed of tuples of (id of node A, id of node B) as keys and tuple of (vessel_length, average_vessel_width, average_pixel_intensity) as values).
+    :return: The adjacent nodes (dict composed of node ids as keys and lists of node ids as values),
+             the node features (dict composed of node ids as keys and an array of [position_x, position_y, vessel_width, pixel_intensity, is_ostium] as values),
+             and the edge features (dict composed of tuples of (id of node A, id of node B) as keys and an array of [vessel_length, average_vessel_width, average_pixel_intensity] as values).
     """
     start_time = time.time()
 
@@ -572,7 +574,7 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
     all_node_features = {}  # node: (position_x, position_y, vessel_width, pixel_intensity, is_ostium)
     unexplored_paths = []  # heap queue containing tuples (-bifurcation_width, path_start_point, parent_point, parent_node_index)
     explored_paths = []  # a list of points representing the first and penultimate points of explored paths
-    all_node_features[0] = get_node_features(ostium, 0, skeleton_distances)
+    all_node_features[0] = get_node_features(ostium, 0, skeleton_distances, raw_image)
 
     # Adding branches that start from the ostium
     branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
@@ -624,14 +626,14 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
             nodes.append(end_point)
             end_point_index = len(nodes) - 1
             adjacent_nodes[end_point_index] = []
-            all_node_features[end_point_index] = get_node_features(end_point, end_point_index, skeleton_distances)
+            all_node_features[end_point_index] = get_node_features(end_point, end_point_index, skeleton_distances, raw_image)
         # If the branch ended on an existing point and we are creating a non oriented graph, we connect the two nodes together
         else:
             end_point_index = nodes.index(end_point)
             adjacent_nodes[end_point_index].append(parent_node_index)
         adjacent_nodes[parent_node_index].append(end_point_index)
 
-        edge_features = get_edge_features(path_points, skeleton_distances)
+        edge_features = get_edge_features(path_points, skeleton_distances, raw_image)
         all_edge_features[(parent_node_index, end_point_index)] = edge_features
         if not oriented:
             all_edge_features[(end_point_index, parent_node_index)] = edge_features
@@ -680,47 +682,47 @@ def extract_graph_from_skeleton(skeleton_distances, bifurcations, ostium, ostium
         plt.imshow(background_image)
 
     # Create the adjacency matrix
-    adjacency_matrix = np.zeros((len(nodes), len(nodes)))
-    for edge_index, adjacent_edges_list in adjacent_nodes.items():
-        adjacency_matrix[edge_index, adjacent_edges_list] = 1
-        if not oriented:
-            adjacency_matrix[adjacent_edges_list, edge_index] = 1
-
-        if show_final_graph:
-            # Plot the edges
-            for adjacent_edge in adjacent_edges_list:
-                plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
-                if oriented:
-                    point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
-                    point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
-                    plt.scatter(point_position_x, point_position_y, s=10)
+    # adjacency_matrix = np.zeros((len(nodes), len(nodes)))
+    # for edge_index, adjacent_edges_list in adjacent_nodes.items():
+    #     adjacency_matrix[edge_index, adjacent_edges_list] = 1
+    #     if not oriented:
+    #         adjacency_matrix[adjacent_edges_list, edge_index] = 1
+    #
+    #     if show_final_graph:
+    #         # Plot the edges
+    #         for adjacent_edge in adjacent_edges_list:
+    #             plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
+    #             if oriented:
+    #                 point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
+    #                 point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
+    #                 plt.scatter(point_position_x, point_position_y, s=10)
 
     if show_final_graph:
         plt.show()
 
-        plt.title("Adjacency matrix")
-        plt.imshow(adjacency_matrix)
-        plt.show()
+        # plt.title("Adjacency matrix")
+        # plt.imshow(adjacency_matrix)
+        # plt.show()
 
-    return adjacency_matrix, all_node_features, all_edge_features
+    return adjacent_nodes, all_node_features, all_edge_features
 
 
-def get_node_features(end_point, end_point_index, skeleton_distances):
+def get_node_features(end_point, end_point_index, skeleton_distances, raw_image):
     position_x = end_point[0] / skeleton_distances.shape[1]
     position_y = end_point[1] / skeleton_distances.shape[0]
     vessel_width = skeleton_distances[end_point[1], end_point[0]]
-    pixel_intensity = raw_image[end_point[1], end_point[0]]
-    is_ostium = end_point_index == 0
-    return position_x, position_y, vessel_width, pixel_intensity, is_ostium
+    pixel_intensity = raw_image[end_point[1], end_point[0]] / 255
+    is_ostium = (end_point_index == 0) * 1
+    return np.array([position_x, position_y, vessel_width, pixel_intensity, is_ostium])
 
 
-def get_edge_features(path_points, skeleton_distances):
+def get_edge_features(path_points, skeleton_distances, raw_image):
     vessel_length = len(path_points)  # TODO make sure all path points are in that list
     average_vessel_width = get_average_vessel_width(path_points, skeleton_distances, real_average=True, debug=False)
     path_points = np.array(path_points)
     intensities = raw_image[path_points[:, 1], path_points[:, 0]]
-    average_pixel_intensity = intensities.mean()
-    return vessel_length, average_vessel_width, average_pixel_intensity
+    average_pixel_intensity = intensities.mean() / 255
+    return np.array([vessel_length, average_vessel_width, average_pixel_intensity])
 
 
 def remove_catheter_points(catheter_points, skeleton, bifurcations):
@@ -1536,17 +1538,30 @@ def get_graph_data_from_raw_image_and_segmentation(raw_image_path, segmented_ima
     :param raw_image_path: Path of the raw image.
     :param segmented_image_path: Path of the segmented image.
     :param oriented: True for getting data of an oriented graph, False for a non oriented graph (where crossings are not identified, thus having many more nodes and shorter edges).
-    :return: The adjacency matrix, node features and edge features.
+    :return: The list of adjacent nodes, node features, edge features and edge ids.
     """
     raw_image = cv2.imread(raw_image_path, cv2.IMREAD_GRAYSCALE)
     segmented_image = cv2.imread(segmented_image_path, cv2.IMREAD_GRAYSCALE)
     segmented_image = fill_missing_pixels(segmented_image)
-    skeleton, bifurcations = vesselanalysis(segmented_image, f"{file_name}_skeleton")
+    last_point_index = segmented_image_path.rfind(".")
+    out_name = segmented_image_path[:last_point_index] + "_skeleton"
+    skeleton, bifurcations = vesselanalysis(segmented_image, out_name)
     ostium, ostium_parent = find_ostium(raw_image, skeleton, bifurcations, debug=False)
     if ostium is None:
         raise Exception(f"Failed to detect the ostium from raw image {raw_image_path} and segmented image {segmented_image_path}.")
-    adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, debug=False)
-    return adjacency_matrix, node_features, edge_features
+    adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(raw_image, segmented_image, skeleton, bifurcations, ostium, ostium_parent, oriented, debug=False)
+    edge_ids = {}  # (node_a, node_b): edge_id
+    edge_counter = 0
+    edges = []
+    edge_attr = []
+    for node_a, nodes_b in adjacency_matrix.items():
+        for node_b in nodes_b:
+            edges.append([node_a, node_b])
+            edge_attr.append(edge_features[(node_a, node_b)])
+            edge_ids[(node_a, node_b)] = edge_counter
+            edge_counter += 1
+    x = [features for features in node_features.values()]
+    return edges, x, edge_attr, edge_ids
 
 
 if __name__ == '__main__':
@@ -1601,7 +1616,7 @@ if __name__ == '__main__':
         if ostium is not None:
             print(f"Ostium found at location {ostium}, parent is {ostium_parent}")
             if extract_graph:
-                adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, show_final_graph=True, debug=debug)
+                adjacency_matrix, node_features, edge_features = extract_graph_from_skeleton(raw_image, segmented_image, skeleton, bifurcations, ostium, ostium_parent, oriented, search_best_crossing=search_best_crossing, show_final_graph=True, debug=debug)
         else:
             print("Ostium not found")
         skeleton[skeleton > 0] = 1
