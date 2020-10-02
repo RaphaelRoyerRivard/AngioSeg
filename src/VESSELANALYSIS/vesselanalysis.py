@@ -649,14 +649,10 @@ def extract_graph_from_skeleton(raw_image, segmented_image, skeleton_distances, 
                     # print("Adding branch", branch)
 
         if debug:
-            adjacency_matrix = np.zeros((len(nodes), len(nodes)))
             plot_title = ("" if oriented else "Non-") + "Oriented Graph Reconstruction step " + str(step)
             plt.title(plot_title)
             plt.imshow(background_image)
             for edge_index, adjacent_edges_list in adjacent_nodes.items():
-                adjacency_matrix[edge_index, adjacent_edges_list] = 1
-                if not oriented:
-                    adjacency_matrix[adjacent_edges_list, edge_index] = 1
                 for adjacent_edge in adjacent_edges_list:
                     plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
                     if oriented:
@@ -681,28 +677,16 @@ def extract_graph_from_skeleton(raw_image, segmented_image, skeleton_distances, 
         plt.title(plot_title)
         plt.imshow(background_image)
 
-    # Create the adjacency matrix
-    # adjacency_matrix = np.zeros((len(nodes), len(nodes)))
-    # for edge_index, adjacent_edges_list in adjacent_nodes.items():
-    #     adjacency_matrix[edge_index, adjacent_edges_list] = 1
-    #     if not oriented:
-    #         adjacency_matrix[adjacent_edges_list, edge_index] = 1
-    #
-    #     if show_final_graph:
-    #         # Plot the edges
-    #         for adjacent_edge in adjacent_edges_list:
-    #             plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
-    #             if oriented:
-    #                 point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
-    #                 point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
-    #                 plt.scatter(point_position_x, point_position_y, s=10)
+        for edge_index, adjacent_edges_list in adjacent_nodes.items():
+            # Plot the edges
+            for adjacent_edge in adjacent_edges_list:
+                plt.plot([nodes[edge_index][0], nodes[adjacent_edge][0]], [nodes[edge_index][1], nodes[adjacent_edge][1]])
+                if oriented:
+                    point_position_x = nodes[adjacent_edge][0] - (nodes[adjacent_edge][0] - nodes[edge_index][0]) * 0.05
+                    point_position_y = nodes[adjacent_edge][1] - (nodes[adjacent_edge][1] - nodes[edge_index][1]) * 0.05
+                    plt.scatter(point_position_x, point_position_y, s=10)
 
-    if show_final_graph:
         plt.show()
-
-        # plt.title("Adjacency matrix")
-        # plt.imshow(adjacency_matrix)
-        # plt.show()
 
     return adjacent_nodes, all_node_features, all_edge_features
 
