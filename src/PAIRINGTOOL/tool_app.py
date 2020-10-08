@@ -1,4 +1,5 @@
 import sys
+import os
 import traceback
 from PyQt5 import QtWidgets, QtGui, QtCore
 import numpy as np
@@ -18,6 +19,20 @@ class GUI(QtWidgets.QMainWindow):
         open_right_image.setStatusTip('Open right image')
         open_right_image.triggered.connect(self.load_right_image)
 
+        # Create the undo action
+        undo = QtWidgets.QAction(QtGui.QIcon('icon/undo.png'), 'Undo (Ctrl+Z)', self)
+        undo.setStatusTip('Undo (Ctrl+Z)')
+        undo.triggered.connect(self.undo)
+        undo_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+Z'), self)
+        undo_shortcut.activated.connect(self.undo)
+
+        # Create the redo action
+        redo = QtWidgets.QAction(QtGui.QIcon('icon/redo.png'), 'Redo (Ctrl+Y)', self)
+        redo.setStatusTip('Redo (Ctrl+Y)')
+        redo.triggered.connect(self.redo)
+        redo_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence('Ctrl+Y'), self)
+        redo_shortcut.activated.connect(self.redo)
+
         # Create the save pairs action
         save_pairs = QtWidgets.QAction(QtGui.QIcon('icon/save.png'), 'Save pairs', self)
         save_pairs.setStatusTip('Save pairs')
@@ -28,12 +43,16 @@ class GUI(QtWidgets.QMainWindow):
         file_menu = self.menu_bar.addMenu('&File')
         file_menu.addAction(open_left_image)
         file_menu.addAction(open_right_image)
+        file_menu.addAction(undo)
+        file_menu.addAction(redo)
         file_menu.addAction(save_pairs)
 
         # Create tool bar
         self.toolbar = self.addToolBar('Tools')
         self.toolbar.addAction(open_left_image)
         self.toolbar.addAction(open_right_image)
+        self.toolbar.addAction(undo)
+        self.toolbar.addAction(redo)
         self.toolbar.addAction(save_pairs)
 
         # Create horizontal layout
@@ -68,9 +87,11 @@ class GUI(QtWidgets.QMainWindow):
 
     def load_left_image(self):
         self.left_image_name, self.left_image_original_size = self.load_image(self.left)
+        self.load_pairs()
 
     def load_right_image(self):
         self.right_image_name, self.right_image_original_size = self.load_image(self.right)
+        self.load_pairs()
 
     def load_image(self, label):
         image_name = ""
@@ -85,15 +106,56 @@ class GUI(QtWidgets.QMainWindow):
             label.setPixmap(pixmap)
         return image_name, original_image_size
 
+    def undo(self):
+        if len(self.overlay.lines) > 0:
+            self.overlay.undone_lines.append(self.overlay.lines.pop(len(self.overlay.lines) - 1))
+            self.overlay.update()
+
+    def redo(self):
+        if len(self.overlay.undone_lines) > 0:
+            self.overlay.lines.append(self.overlay.undone_lines.pop(len(self.overlay.undone_lines) - 1))
+            self.overlay.update()
+
     def save_pairs_to_file(self):
         if self.left_image_name and self.right_image_name:
-            print("save", self.left_image_name, self.right_image_name, self.overlay.lines)
-            for pair in self.overlay.lines:
+            pairs = np.zeros((len(self.overlay.lines), 4), dtype=np.float)
+            for i, pair in enumerate(self.overlay.lines):
                 left_point = np.array([pair[0].x(), pair[0].y()], dtype=np.float)
-                right_point = np.array([pair[1].x(), pair[1].y()], dtype=np.float)
-                left_point *= np.array(self.left_image_original_size, dtype=np.float) / np.array([self.left.width(), self.left.height()], dtype=np.float)
-                right_point *= np.array(self.right_image_original_size, dtype=np.float) / np.array([self.right.width(), self.right.height()], dtype=np.float)
-                print(left_point, right_point)
+                right_point = np.array([pair[1].x() - self.right.x(), pair[1].y()], dtype=np.float)
+                left_point /= np.array([self.left.width(), self.left.height()], dtype=np.float)
+                right_point /= np.array([self.right.width(), self.right.height()], dtype=np.float)
+                pairs[i] = np.concatenate((left_point, right_point))
+            if not os.path.exists("./pairs"):
+                os.mkdir("./pairs")
+            file_name = f"./pairs/{self.left_image_name}__{self.right_image_name}"
+            np.save(file_name, pairs)
+
+    def load_pairs(self):
+        print("load_pairs")
+        remove_lines = True
+        if self.left_image_name and self.right_image_name:
+            file_name = f"./pairs/{self.left_image_name}__{self.right_image_name}.npy"
+            print(file_name)
+            if os.path.exists(file_name):
+                remove_lines = False
+                pairs = np.load(file_name)
+                for points in pairs:
+                    left_point = self.convert_image_point_to_qpoint(points[0], points[1], False)
+                    right_point = self.convert_image_point_to_qpoint(points[2], points[3], True)
+                    self.overlay.lines.append([left_point, right_point])
+        if remove_lines:
+            self.overlay.lines.clear()
+        self.overlay.update()
+
+    def convert_image_point_to_qpoint(self, x, y, right):
+        """
+        Converts a point (x, y) between 0 and 1 to a QPoint to show at the right place on the images.
+        """
+        x *= self.left.width()
+        y *= self.left.height()
+        if right:
+            x += self.right.x()
+        return QtCore.QPoint(x, y)
 
 
 class TranslucentWidget(QtWidgets.QWidget):
@@ -103,6 +165,7 @@ class TranslucentWidget(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setMouseTracking(True)
         self.lines = []
+        self.undone_lines = []
         self.mouse_pos = None
         self.first_point_valid = False
 
