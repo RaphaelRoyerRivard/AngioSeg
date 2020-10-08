@@ -8,6 +8,7 @@ import numpy as np
 class GUI(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle('Pairs identification tool for images')
 
         # Create the open left image action
         open_left_image = QtWidgets.QAction(QtGui.QIcon('icon/open.png'), 'Open left image', self)
@@ -129,19 +130,33 @@ class GUI(QtWidgets.QMainWindow):
                 os.mkdir("./pairs")
             file_name = f"./pairs/{self.left_image_name}__{self.right_image_name}"
             np.save(file_name, pairs)
+            reversed_file_name = f"./pairs/{self.right_image_name}__{self.left_image_name}.npy"
+            if os.path.exists(reversed_file_name):
+                os.remove(reversed_file_name)
 
     def load_pairs(self):
-        print("load_pairs")
-        remove_lines = True
+        remove_lines = True  # if there is no pairs saved, we want to clear the lines
         if self.left_image_name and self.right_image_name:
+            reverse_images = False
+            file_found = False
             file_name = f"./pairs/{self.left_image_name}__{self.right_image_name}.npy"
-            print(file_name)
             if os.path.exists(file_name):
+                file_found = True
+            else:
+                file_name = f"./pairs/{self.right_image_name}__{self.left_image_name}.npy"
+                if os.path.exists(file_name):
+                    reverse_images = True
+                    file_found = True
+            if file_found:
                 remove_lines = False
                 pairs = np.load(file_name)
                 for points in pairs:
-                    left_point = self.convert_image_point_to_qpoint(points[0], points[1], False)
-                    right_point = self.convert_image_point_to_qpoint(points[2], points[3], True)
+                    if reverse_images:
+                        left_point = self.convert_image_point_to_qpoint(points[0], points[1], right=False)
+                        right_point = self.convert_image_point_to_qpoint(points[2], points[3], right=True)
+                    else:
+                        left_point = self.convert_image_point_to_qpoint(points[2], points[3], right=True)
+                        right_point = self.convert_image_point_to_qpoint(points[0], points[1], right=False)
                     self.overlay.lines.append([left_point, right_point])
         if remove_lines:
             self.overlay.lines.clear()
