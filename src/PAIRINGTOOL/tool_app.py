@@ -228,7 +228,7 @@ class TranslucentWidget(QtWidgets.QWidget):
         super().paintEvent(ev)
         qp = QtGui.QPainter(self)
         qp.setRenderHint(QtGui.QPainter.Antialiasing)
-        pen = QtGui.QPen(QtCore.Qt.red, 3)
+        pen = QtGui.QPen(QtCore.Qt.red, 1)
         brush = QtGui.QBrush(QtCore.Qt.red)
         qp.setPen(pen)
         qp.setBrush(brush)
