@@ -1559,6 +1559,9 @@ if __name__ == '__main__':
     To extract the graph of a skeleton made from a segmentation file, use these command line parameters (add --oriented for the oriented graph):
     python src/VESSELANALYSIS/vesselanalysis.py --input [file] --extract_graph True
     
+    To extract the graphs of the skeletons made from the segmentation files, use these command line parameters (add --oriented for the oriented graph):
+    python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --extract_graph True --file_type tif
+    
     To evaluate the ostium detection on all segmented files, use these command line parameters:
     python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --file_type tif --evaluate True
     """
@@ -1635,7 +1638,7 @@ if __name__ == '__main__':
                 image_path = f'{path}\\{file}'
                 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
 
-                if visualize or evaluate:
+                if visualize or evaluate or extract_graph:
                     file_name = file.split(f".{file_type}")[0]
                     segmentation_file_name = f"{file_name}_seg"
                     segmentation_file = f"{path}\\{segmentation_file_name}.{file_type}"
@@ -1648,6 +1651,19 @@ if __name__ == '__main__':
                         skeleton, components = vesselanalysis(seg_image, output)
                         output = f'{output_folder}\\{file_name}_overlap.png'
                         overlap(image, seg_image, skeleton, components, output)
+
+                    elif extract_graph:
+                        edges, x, edge_attr, edge_ids = get_graph_data_from_raw_image_and_segmentation(image_path, segmentation_file, oriented)
+
+                        edge_index = np.array(edges, dtype=np.long)
+                        x = np.array(x)  # position_x, position_y, vessel_width, pixel_intensity, is_ostium
+                        x[:, 2] /= np.max(x[:, 2], axis=0)  # normalize vessel width
+                        edge_attr = np.array(edge_attr)  # vessel_length, average_vessel_width, average_pixel_intensity
+                        edge_attr[:, 0:2] /= np.max(edge_attr[:, 0:2], axis=0)  # normalize vessel length and average vessel width
+
+                        graph_path = f"{path}\\{file_name}_graph"
+                        np.save(graph_path, [x, edge_index, edge_attr])
+                        break
 
                     else:
                         skeleton, bifurcations = vesselanalysis(seg_image, f"{output_folder}\\{file_name}_skeleton")
