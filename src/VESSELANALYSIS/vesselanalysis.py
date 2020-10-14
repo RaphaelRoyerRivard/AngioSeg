@@ -1661,7 +1661,7 @@ if __name__ == '__main__':
                         edge_attr = np.array(edge_attr)  # vessel_length, average_vessel_width, average_pixel_intensity
                         edge_attr[:, 0:2] /= np.max(edge_attr[:, 0:2], axis=0)  # normalize vessel length and average vessel width
 
-                        graph_path = f"{path}\\{file_name}_graph"
+                        graph_path = f"{path}\\{file_name}_graph" + ("_oriented" if oriented else "")
                         np.save(graph_path, [x, edge_index, edge_attr])
                         break
 

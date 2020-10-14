@@ -24,6 +24,16 @@ def get_graph_data_from_images(raw_image_path, segmented_image_path, oriented):
     return Data(x=x, edge_index=edge_index.t().contiguous(), edge_attr=edge_attr)
 
 
+def get_graph_data_from_numpy_graph_file(graph_file_path):
+    graph_data = np.load(graph_file_path, allow_pickle=True)
+
+    x = torch.tensor(graph_data[0], dtype=torch.float)
+    edge_index = torch.tensor(graph_data[1], dtype=torch.long)
+    edge_attr = torch.tensor(graph_data[2], dtype=torch.float)
+
+    return Data(x=x, edge_index=edge_index.t().contiguous(), edge_attr=edge_attr)
+
+
 if __name__ == '__main__':
     # TODO the edges should be doubled when oriented=False
 
@@ -41,3 +51,8 @@ if __name__ == '__main__':
     data = get_graph_data_from_images(raw_image_path, segmented_image_path, oriented=True)
     print(data)
     print(data.is_directed())
+
+    graph_file_path = images_path + r"\1933060_LCA_90_0_3_graph_oriented.npy"
+    data2 = get_graph_data_from_numpy_graph_file(graph_file_path)
+    print(data2)
+    print(data2.is_directed())
