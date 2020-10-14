@@ -87,17 +87,23 @@ class GUI(QtWidgets.QMainWindow):
         self.overlay.resize(self.width(), self.height() - overlay_y)
 
     def load_left_image(self):
-        self.left_image_name, self.left_image_original_size = self.load_image(self.left)
+        image_name, image_original_size = self.load_image(self.left)
+        if image_name:
+            self.left_image_name = image_name
+            self.left_image_original_size = image_original_size
         self.load_pairs()
 
     def load_right_image(self):
-        self.right_image_name, self.right_image_original_size = self.load_image(self.right)
+        image_name, image_original_size = self.load_image(self.right)
+        if image_name:
+            self.right_image_name = image_name
+            self.right_image_original_size = image_original_size
         self.load_pairs()
 
     def load_image(self, label):
         image_name = ""
         original_image_size = (0, 0)
-        image_path, file_type = QtWidgets.QFileDialog.getOpenFileName(None, 'OpenFile', '.', "Image file(*.png)")
+        image_path, file_type = QtWidgets.QFileDialog.getOpenFileName(None, f'Load {"left" if label.x() == 0 else "right"} image', '.', "Image file(*.png)")
         if image_path:
             image_name = image_path.split("\\")[-1].split("/")[-1]
             image_name = image_name[:image_name.rindex(".")]
@@ -119,13 +125,21 @@ class GUI(QtWidgets.QMainWindow):
 
     def save_pairs_to_file(self):
         if self.left_image_name and self.right_image_name:
+            print(f"Saving {len(self.overlay.lines)} pairs for images {self.left_image_name} and {self.right_image_name}")
+            invalid_pairs_count = 0
             pairs = np.zeros((len(self.overlay.lines), 4), dtype=np.float)
             for i, pair in enumerate(self.overlay.lines):
                 left_point = np.array([pair[0].x(), pair[0].y()], dtype=np.float)
                 right_point = np.array([pair[1].x() - self.right.x(), pair[1].y()], dtype=np.float)
                 left_point /= np.array([self.left.width(), self.left.height()], dtype=np.float)
                 right_point /= np.array([self.right.width(), self.right.height()], dtype=np.float)
-                pairs[i] = np.concatenate((left_point, right_point))
+                if 0 <= left_point[0] <= 1 and 0 <= left_point[1] <= 1 and 0 <= right_point[0] <= 1 and 0 <= right_point[1] <= 1:
+                    pairs[i-invalid_pairs_count] = np.concatenate((left_point, right_point))
+                else:
+                    print(f"invalid points pair {pair} -> {[left_point, right_point]}")
+                    invalid_pairs_count += 1
+            if invalid_pairs_count > 0:
+                pairs = pairs[:-invalid_pairs_count]
             if not os.path.exists("./pairs"):
                 os.mkdir("./pairs")
             file_name = f"./pairs/{self.left_image_name}__{self.right_image_name}"
@@ -135,7 +149,8 @@ class GUI(QtWidgets.QMainWindow):
                 os.remove(reversed_file_name)
 
     def load_pairs(self):
-        remove_lines = True  # if there is no pairs saved, we want to clear the lines
+        print(f"Loading pairs for {self.left_image_name} and {self.right_image_name}")
+        self.overlay.lines.clear()
         if self.left_image_name and self.right_image_name:
             reverse_images = False
             file_found = False
@@ -148,18 +163,18 @@ class GUI(QtWidgets.QMainWindow):
                     reverse_images = True
                     file_found = True
             if file_found:
-                remove_lines = False
                 pairs = np.load(file_name)
+                print(f"Loaded {pairs.shape[0]} pairs")
                 for points in pairs:
+                    if points[0] < 0 or points[0] > 1 or points[2] < 0 or points[2] > 1:
+                        print("invalid points pair", points)
                     if reverse_images:
+                        left_point = self.convert_image_point_to_qpoint(points[2], points[3], right=False)
+                        right_point = self.convert_image_point_to_qpoint(points[0], points[1], right=True)
+                    else:
                         left_point = self.convert_image_point_to_qpoint(points[0], points[1], right=False)
                         right_point = self.convert_image_point_to_qpoint(points[2], points[3], right=True)
-                    else:
-                        left_point = self.convert_image_point_to_qpoint(points[2], points[3], right=True)
-                        right_point = self.convert_image_point_to_qpoint(points[0], points[1], right=False)
                     self.overlay.lines.append([left_point, right_point])
-        if remove_lines:
-            self.overlay.lines.clear()
         self.overlay.update()
 
     def convert_image_point_to_qpoint(self, x, y, right):
@@ -221,8 +236,9 @@ class TranslucentWidget(QtWidgets.QWidget):
             self.first_point_valid = False
 
     def mouseMoveEvent(self, a0: QtGui.QMouseEvent) -> None:
-        self.mouse_pos = a0.pos()
-        self.update()
+        if self.first_point_valid:
+            self.mouse_pos = a0.pos()
+            self.update()
 
     def paintEvent(self, ev):
         super().paintEvent(ev)
