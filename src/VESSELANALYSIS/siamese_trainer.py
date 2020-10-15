@@ -58,33 +58,34 @@ def get_node_pairs(graph_data_a, graph_data_b, point_pairs):
     return torch.tensor(node_pairs)
 
 
-if __name__ == '__main__':
-
-    # View 1
-    view_name = "1933060_LCA_-30_-25_2"
-    images_path = f"C:/Users/Raphael/Pictures/skeleton/{view_name}"
-    # raw_image_path = images_path + r"\1933060_LCA_-30_-25_2.tif"
-    # segmented_image_path = images_path + r"\1933060_LCA_-30_-25_2_seg.tif"
-    # data = get_graph_data_from_images(raw_image_path, segmented_image_path, oriented=True)
-    graph_file_path = images_path + f"/{view_name}_graph_oriented.npy"
-    data = get_graph_data_from_numpy_graph_file(graph_file_path)
-    print(data)
-
-    # View 2
-    view_name2 = "1933060_LCA_90_0_3"
-    images_path2 = f"C:/Users/Raphael/Pictures/skeleton/{view_name2}"
-    # raw_image_path2 = images_path2 + r"\1933060_LCA_90_0_3.tif"
-    # segmented_image_path2 = images_path2 + r"\1933060_LCA_90_0_3_seg.tif"
-    # data2 = get_graph_data_from_images(raw_image_path2, segmented_image_path2, oriented=True)
-    graph_file_path2 = images_path2 + f"/{view_name2}_graph_oriented.npy"
-    data2 = get_graph_data_from_numpy_graph_file(graph_file_path2)
-    print(data2)
-
+def get_all_node_pairs(graphs_path, point_pairs_path, view_pairs):
+    all_node_pairs = {}
     # Load hand made node pairs
-    node_pairs_path = r".\src\PAIRINGTOOL\pairs"
-    image_pairs = load_node_pairs_from_path(node_pairs_path)
-    point_pairs = torch.tensor(image_pairs[(view_name, view_name2)], dtype=torch.float)
+    image_pairs = load_node_pairs_from_path(point_pairs_path)
+    # Loop over all view pairs
+    for view_pair in view_pairs:
+        print(view_pair)
+        graph_data = []
+        for view in view_pair:
+            graph_file_path = graphs_path + f"{view}/{view}_graph_oriented.npy"
+            graph_data.append(get_graph_data_from_numpy_graph_file(graph_file_path))
 
-    # Associate pairs with nodes
-    node_pairs = get_node_pairs(data, data2, point_pairs)
-    print(node_pairs)
+        # Convert point pairs to tensors so we can efficiently compute distances between image points and graph nodes
+        point_pairs = torch.tensor(image_pairs[(view_pair[0], view_pair[1])], dtype=torch.float)
+
+        # Associate pairs with nodes
+        node_pairs = get_node_pairs(graph_data[0], graph_data[1], point_pairs)
+        all_node_pairs[view_pair] = node_pairs
+
+    return all_node_pairs
+
+
+if __name__ == '__main__':
+    graphs_path = f"C:/Users/Raphael/Pictures/skeleton/"
+    point_pairs_path = r".\src\PAIRINGTOOL\pairs"
+    view_pairs = [("1933060_LCA_-30_-25_2", "1933060_LCA_90_0_3"),
+                  ("2022653_LCA_-30_-25_2", "2022653_LCA_90_0"),
+                  ("3013714_LCA_-10_40", "3013714_LCA_90_0_2")]
+
+    all_node_pairs = get_all_node_pairs(graphs_path, point_pairs_path, view_pairs)
+    print(all_node_pairs)
