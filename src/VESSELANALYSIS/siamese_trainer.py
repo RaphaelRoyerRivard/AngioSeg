@@ -36,6 +36,28 @@ def get_graph_data_from_numpy_graph_file(graph_file_path):
     return Data(x=x, edge_index=edge_index.t().contiguous(), edge_attr=edge_attr)
 
 
+def get_node_pairs(graph_data_a, graph_data_b, point_pairs):
+    node_pairs = []
+    for i, point_pair in enumerate(point_pairs):
+        diff_vectors_a = graph_data_a.x[:, :2] - point_pair[0]
+        distances_a = torch.sqrt(torch.sum(diff_vectors_a ** 2, dim=1))
+        node_index_a = torch.argmin(distances_a)
+        if distances_a[node_index_a] > 0.007:  # Around 7 pixels for a 1024 x 1024 image
+            print(f"Skipped pair {i}, distance_a = {distances_a[node_index_a]}")
+            continue
+
+        diff_vectors_b = graph_data_b.x[:, :2] - point_pair[1]
+        distances_b = torch.sqrt(torch.sum(diff_vectors_b ** 2, dim=1))
+        node_index_b = torch.argmin(distances_b)
+        if distances_b[node_index_b] > 0.007:  # Around 7 pixels for a 1024 x 1024 image
+            print(f"Skipped pair {i}, distance_b = {distances_b[node_index_b]}")
+            continue
+
+        node_pairs.append((node_index_a, node_index_b))
+
+    return torch.tensor(node_pairs)
+
+
 if __name__ == '__main__':
 
     # View 1
@@ -55,10 +77,14 @@ if __name__ == '__main__':
     # segmented_image_path2 = images_path2 + r"\1933060_LCA_90_0_3_seg.tif"
     # data2 = get_graph_data_from_images(raw_image_path2, segmented_image_path2, oriented=True)
     graph_file_path2 = images_path2 + f"/{view_name2}_graph_oriented.npy"
-    data2 = get_graph_data_from_numpy_graph_file(graph_file_path)
+    data2 = get_graph_data_from_numpy_graph_file(graph_file_path2)
     print(data2)
 
+    # Load hand made node pairs
     node_pairs_path = r".\src\PAIRINGTOOL\pairs"
     image_pairs = load_node_pairs_from_path(node_pairs_path)
-    print(image_pairs.keys())
-    print(image_pairs[(view_name, view_name2)])
+    point_pairs = torch.tensor(image_pairs[(view_name, view_name2)], dtype=torch.float)
+
+    # Associate pairs with nodes
+    node_pairs = get_node_pairs(data, data2, point_pairs)
+    print(node_pairs)
