@@ -10,8 +10,9 @@ from torch_geometric.utils import to_networkx
 import networkx as nx
 from matplotlib import pyplot as plt
 from os import walk
+import sys
 import time
-from siamese_trainer import get_graph_data_from_images
+from siamese_trainer import get_graph_data_from_images, get_graph_data_from_numpy_graph_file
 
 
 class NodeEdgeConv(MessagePassing):
@@ -117,13 +118,14 @@ class CosineSimilarityLoss(nn.Module):
         return torch.mean(cosim)
 
 
-class SquaredDistanceLoss(nn.Module):
+class ClampedSquaredDistanceLoss(nn.Module):
     def __init__(self):
-        super(SquaredDistanceLoss, self).__init__()
+        super(ClampedSquaredDistanceLoss, self).__init__()
 
     def forward(self, x):
         normalized_x = F.normalize(x, dim=-1)
         dist = torch.cdist(normalized_x, normalized_x)
+        dist = torch.clamp_max(dist, 0.25)
         return -torch.mean(dist)
 
 
@@ -267,11 +269,13 @@ def train_on_multiple_graphs():
     dataset = []
     for path, subfolders, files in walk(DATA_PATH):
         folder = path.split("\\")[-1].split("/")[-1]
-        if folder + ".tif" not in files:
+        # if folder + ".tif" not in files:
+        if folder + "_graph_oriented.npy" not in files:
             continue
         # Load graph
-        raw_image_path, segmented_image_path = get_image_paths(patient_angle=folder)
-        data = get_graph_data_from_images(raw_image_path, segmented_image_path, oriented=True)
+        # raw_image_path, segmented_image_path = get_image_paths(patient_angle=folder)
+        # data = get_graph_data_from_images(raw_image_path, segmented_image_path, oriented=True)
+        data = get_graph_data_from_numpy_graph_file(path + "/" + folder + "_graph_oriented.npy")
         dataset.append(data)
 
     print(f"getting graph data took {time.time() - start_time}s")
@@ -280,23 +284,37 @@ def train_on_multiple_graphs():
     input_size = dataset[0].x.shape[1]
     model = GCN(input_size, 2)
 
-    loss_function = SquaredDistanceLoss()
+    loss_function = ClampedSquaredDistanceLoss()
     # loss_function = CosineSimilarityLoss()
     # loss_function = DoubleLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
 
-    train_loader = DataLoader(dataset[:60], batch_size=5, shuffle=True)
-    test_loader = DataLoader(dataset[60:], batch_size=5, shuffle=False)
+    # train_loader = DataLoader(dataset[:60], batch_size=5, shuffle=True)
+    # val_loader = DataLoader(dataset[60:], batch_size=5, shuffle=True)
+    train_loader = DataLoader(dataset[:3], batch_size=1, shuffle=True)
+    val_loader = DataLoader(dataset[-3:-1], batch_size=1, shuffle=True)
+    test_loader = DataLoader(dataset[-1:], batch_size=1, shuffle=True)
     losses = []
     val_losses = []
+    min_val_loss = 1e10  # big number
     out = None
     val_out = None
     epoch = 0
+
+    # Show output before training
+    val_loss, val_out = test_with_dataloader(model, train_loader, loss_function)
+    normalized_out = F.normalize(val_out, dim=-1)
+    visualize(normalized_out, color='b', title="Normalized untrained embeddings")
+
+    # Train
     for epoch in range(1, 201):
         loss, out, h = train_with_dataloader(model, train_loader, loss_function, optimizer)
         losses.append(loss)
-        val_loss, val_out = test_with_dataloader(model, test_loader, loss_function)
+        val_loss, val_out = test_with_dataloader(model, val_loader, loss_function)
         val_losses.append(val_loss)
+        if val_loss < min_val_loss:
+            min_val_loss = val_loss
+            torch.save(model.state_dict(), './training_state.pth')
         # print(f'Epoch: {epoch:03d}, Train Acc: {train_acc:.4f}, Test Acc: {test_acc:.4f}')
 
     plt.plot(losses, label="Training loss")
@@ -305,12 +323,20 @@ def train_on_multiple_graphs():
     plt.legend()
     plt.show()
 
+    model.load_state_dict(torch.load('./training_state.pth'))
+
+    loss, out = test_with_dataloader(model, train_loader, loss_function)
     visualize(out, color='b', epoch=epoch, loss=losses[-1], title="Final embeddings")
     normalized_out = F.normalize(out, dim=-1)
     visualize(normalized_out, color='b', epoch=epoch, loss=losses[-1], title="Normalized final embeddings")
 
+    val_loss, val_out = test_with_dataloader(model, val_loader, loss_function)
     normalized_val_out = F.normalize(val_out, dim=-1)
-    visualize(normalized_val_out, color='b', title="Normalized embeddings of a graph from test set")
+    visualize(normalized_val_out, color='b', title="Normalized embeddings of a graph from validation set")
+
+    test_loss, test_out = test_with_dataloader(model, test_loader, loss_function)
+    normalized_test_out = F.normalize(test_out, dim=-1)
+    visualize(normalized_test_out, color='b', title="Normalized embeddings of a graph from test set")
 
 
 def get_image_paths(whole_path=None, patient_angle=None):
