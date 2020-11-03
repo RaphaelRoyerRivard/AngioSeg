@@ -577,7 +577,7 @@ def extract_graph_from_skeleton(raw_image, segmented_image, skeleton_distances, 
     all_node_features[0] = get_node_features(ostium, 0, skeleton_distances, raw_image)
 
     # Adding branches that start from the ostium
-    branches = get_branches(ostium[::-1], skeleton_distances, debug=False)
+    branches = get_branches(ostium[::-1], skeleton_distances, debug=False)  # [::-1] reverses the order of the elements
     for branch in branches:
         branch_point = (ostium[0] + branch[1], ostium[1] + branch[0])
         if ostium_parent != branch_point:
@@ -1147,6 +1147,7 @@ def get_direction_vector_and_vessel_width_from_end_node(end_node, skeleton_dista
     :param max_node_count: The number of nodes we want to consider before stopping checking farther back.
     :return: The direction vector and the list of points.
     """
+    max_node_count = round(max_node_count * skeleton_distances.shape[0] / 1024)
     vectors = []
     vector = np.array([0, 0])
     points = []
@@ -1411,6 +1412,7 @@ def vesselanalysis(image, out_name, use_scikit=True):
 
 
 def remove_spurs(bifurcation_list, bifurcations_layer, bifurcations, skeleton_distance, cvskel, distance):
+    image_size_ratio = 1024 / cvskel.shape[0]  # reversed because we want to scale up the threshold when the image is smaller
     iterate = True
     iteration = 0
     while iterate:
@@ -1430,8 +1432,8 @@ def remove_spurs(bifurcation_list, bifurcations_layer, bifurcations, skeleton_di
                 branch_points = result_dict["branch_points"]
                 ends_on_dead_end = result_dict["dead_end"]
                 if ends_on_dead_end:
-                    branch_length = len(branch_points)
-                    branch_width = get_average_vessel_width(branch_points, skeleton_distance, real_average=True)
+                    branch_length = len(branch_points) * image_size_ratio
+                    branch_width = get_average_vessel_width(branch_points, skeleton_distance, real_average=True) * image_size_ratio
                     width_to_length_ratio = branch_width / branch_length
                     # print(f"branch {branch} has a length of {branch_length} and a width/len ratio of {width_to_length_ratio}")
                     if width_to_length_ratio > 0.1 + 0.01 * branch_length:  # The longer the branch is, the higher the width to length ratio threshold is
@@ -1706,4 +1708,12 @@ if __name__ == '__main__':
         if evaluate:
             sorted_evaluation_results = sorted(evaluation_results.items(), key=operator.itemgetter(1))
             print(sorted_evaluation_results)
-            print(f"average: {np.mean(np.array(list(evaluation_results.values())))}px")
+            evaluation_results_values = np.array(list(evaluation_results.values()))
+            print(f"average: {np.mean(evaluation_results_values)}px")
+
+            plt.title(f"Cumulative histogram of ostium distance with ground truth")
+            plt.xlabel("Distance (px)")
+            plt.ylabel("Ratio of images")
+            plt.hist(evaluation_results_values, bins=len(evaluation_results_values), histtype='stepfilled', cumulative=True, density=True)
+            plt.grid(True)
+            plt.show()
