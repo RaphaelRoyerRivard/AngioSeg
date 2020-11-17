@@ -1566,6 +1566,9 @@ if __name__ == '__main__':
     
     To evaluate the ostium detection on all segmented files, use these command line parameters:
     python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --file_type tif --evaluate True
+    
+    To evaluate the oriented graph extraction specificity on all segmented files, use these command line parameters:
+    python src/VESSELANALYSIS/vesselanalysis.py --input [folder] --file_type tif --extract_graph True --evaluate True
     """
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', default='.', help='input file or folder in which to search recursively for images of segmented frames to skeletonize')
@@ -1656,8 +1659,10 @@ if __name__ == '__main__':
 
                     elif extract_graph:
                         edges, x, edge_attr, edge_ids = get_graph_data_from_raw_image_and_segmentation(image_path, segmentation_file, oriented)
-
                         edge_index = np.array(edges, dtype=np.long)
+                        first_nodes = edge_index[:, 0]
+                        second_nodes = edge_index[:, 1]
+                        dead_end_branches_count = len([node for node in second_nodes if node not in first_nodes])
                         x = np.array(x)  # position_x, position_y, vessel_width, pixel_intensity, is_ostium
                         x[:, 2] /= np.max(x[:, 2], axis=0)  # normalize vessel width
                         edge_attr = np.array(edge_attr)  # vessel_length, average_vessel_width, average_pixel_intensity
@@ -1665,6 +1670,14 @@ if __name__ == '__main__':
 
                         graph_path = f"{path}\\{file_name}_graph" + ("_oriented" if oriented else "")
                         np.save(graph_path, [x, edge_index, edge_attr])
+
+                        if evaluate:
+                            edges, x, edge_attr, edge_ids = get_graph_data_from_raw_image_and_segmentation(image_path, segmentation_file, not oriented)
+                            edge_index = np.array(edges, dtype=np.long)
+                            first_nodes = edge_index[:, 0]
+                            second_nodes = edge_index[:, 1]
+                            dead_end_branches_count2 = len([node for node in second_nodes if node not in first_nodes])
+                            evaluation_results[file_name] = min(dead_end_branches_count, dead_end_branches_count2) / max(dead_end_branches_count, dead_end_branches_count2)
                         break
 
                     else:
@@ -1709,10 +1722,14 @@ if __name__ == '__main__':
             sorted_evaluation_results = sorted(evaluation_results.items(), key=operator.itemgetter(1))
             print(sorted_evaluation_results)
             evaluation_results_values = np.array(list(evaluation_results.values()))
-            print(f"average: {np.mean(evaluation_results_values)}px")
+            print(f"average: {np.mean(evaluation_results_values) * 100 if extract_graph else 1}{'%' if extract_graph else 'px'}")
 
-            plt.title(f"Cumulative histogram of ostium distance with ground truth")
-            plt.xlabel("Distance (px)")
+            if extract_graph:
+                plt.title(f"Cumulative histogram of oriented graph branches extraction specificity")
+                plt.xlabel("# of extracted dead-ended branches / # of all dead-ended branches")
+            else:
+                plt.title(f"Cumulative histogram of ostium distance with ground truth")
+                plt.xlabel("Distance (px)")
             plt.ylabel("Ratio of images")
             plt.hist(evaluation_results_values, bins=len(evaluation_results_values), histtype='stepfilled', cumulative=True, density=True)
             plt.grid(True)
