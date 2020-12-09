@@ -12,7 +12,6 @@ from matplotlib import pyplot as plt
 from os import walk
 import sys
 import time
-from siamese_trainer import get_graph_data_from_images, get_graph_data_from_numpy_graph_file
 
 
 class NodeEdgeConv(MessagePassing):
@@ -150,6 +149,36 @@ class DoubleLoss(nn.Module):
 
         print("cosim", torch.mean(cosim), "dist", -torch.mean(dist))
         return torch.mean(cosim) - torch.mean(dist)
+
+
+class SiameseLoss(nn.Module):
+    def __init__(self):
+        super(SiameseLoss, self).__init__()
+
+    def forward(self, x1, x2, gt):
+        normalized_x1 = F.normalize(x1, dim=-1)
+        normalized_x2 = F.normalize(x2, dim=-1)
+        # dist = torch.cdist(normalized_x1, normalized_x2)  # this would be useful to compute distance for every possible pair
+        dist = torch.abs(normalized_x1 - normalized_x2)
+        # dist = torch.abs(x1 - x2)
+        # distsq = dist ** 2
+        summed_dists = torch.sum(dist, dim=1)
+        loss = summed_dists * gt
+        return -torch.mean(loss)
+
+
+class SiameseAllPairsLoss(nn.Module):
+    def __init__(self):
+        super(SiameseAllPairsLoss, self).__init__()
+
+    def forward(self, x1, x2, gt):
+        # normalized_x1 = F.normalize(x1, dim=-1)
+        # normalized_x2 = F.normalize(x2, dim=-1)
+        dist = torch.cdist(x1, x2)
+        distsq = dist ** 2
+        summed_dists = torch.sum(distsq, dim=1)
+        loss = summed_dists * gt
+        return -torch.mean(loss)
 
 
 def visualize(h, color='r', epoch=None, loss=None, title=""):
@@ -369,4 +398,5 @@ if __name__ == '__main__':
     #     print(data)
     #     print()
 
+    from siamese_trainer import get_graph_data_from_images, get_graph_data_from_numpy_graph_file
     train_on_multiple_graphs()
