@@ -158,10 +158,9 @@ class SiameseLoss(nn.Module):
     def forward(self, x1, x2, gt):
         normalized_x1 = F.normalize(x1, dim=-1)
         normalized_x2 = F.normalize(x2, dim=-1)
-        # dist = torch.cdist(normalized_x1, normalized_x2)  # this would be useful to compute distance for every possible pair
         dist = torch.abs(normalized_x1 - normalized_x2)
         # dist = torch.abs(x1 - x2)
-        # distsq = dist ** 2
+        dist = dist ** 2
         summed_dists = torch.sum(dist, dim=1)
         loss = summed_dists * gt
         return -torch.mean(loss)
@@ -171,13 +170,17 @@ class SiameseAllPairsLoss(nn.Module):
     def __init__(self):
         super(SiameseAllPairsLoss, self).__init__()
 
-    def forward(self, x1, x2, gt):
+    def forward(self, x1, x2, positive_pairs):
         # normalized_x1 = F.normalize(x1, dim=-1)
         # normalized_x2 = F.normalize(x2, dim=-1)
+        # dist = torch.cdist(normalized_x1, normalized_x2)
         dist = torch.cdist(x1, x2)
-        distsq = dist ** 2
-        summed_dists = torch.sum(distsq, dim=1)
-        loss = summed_dists * gt
+        gt = torch.ones_like(dist)
+        gt[positive_pairs] = -1
+        loss = dist * gt
+        loss = torch.clamp_max(loss, 0.25)
+        # distsq = dist ** 2
+        # summed_dists = torch.sum(distsq, dim=1)
         return -torch.mean(loss)
 
 

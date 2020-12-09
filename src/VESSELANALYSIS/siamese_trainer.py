@@ -7,7 +7,7 @@ import numpy as np
 from vesselanalysis import get_graph_data_from_raw_image_and_segmentation
 from node_pairs_loader import load_node_pairs_from_path
 from trainer import fit
-from graph_match_net import GCN, SiameseLoss
+from graph_match_net import GCN, SiameseLoss, SiameseAllPairsLoss
 
 
 def get_graph_data_from_images(raw_image_path, segmented_image_path, oriented):
@@ -148,7 +148,7 @@ class NodePairsDataset(Dataset):
 
 
 if __name__ == '__main__':
-    old_training = True
+    old_training = False
     graphs_path = f"C:/Users/Raphael/Pictures/skeleton/"
     point_pairs_path = r"..\PAIRINGTOOL\pairs"
     view_pairs = [("1933060_LCA_-30_-25_2", "1933060_LCA_90_0_3"),
@@ -162,10 +162,11 @@ if __name__ == '__main__':
             views.append(view_pair[0])
         if view_pair[1] not in views:
             views.append(view_pair[1])
-    if old_training:
-        data = get_all_graph_data(graphs_path, views, type='dict')
-    else:
-        data = get_all_graph_data(graphs_path, views, type='list')
+    # if old_training:
+    #     data = get_all_graph_data(graphs_path, views, type='dict')
+    # else:
+    #     data = get_all_graph_data(graphs_path, views, type='list')
+    data = get_all_graph_data(graphs_path, views, type='dict')
 
     # Create training and validation sets for node pairs
     if old_training:
@@ -174,20 +175,25 @@ if __name__ == '__main__':
         train_loader = DataLoader(training_dataset, batch_size=1, shuffle=False, num_workers=0)
         val_loader = DataLoader(validation_dataset, batch_size=1, shuffle=False, num_workers=0)
     else:
-        train_loader = GeometricDataLoader(data[:-1], batch_size=1, shuffle=True)
-        val_loader = GeometricDataLoader(data[-1:], batch_size=1, shuffle=True)
+        # train_loader = GeometricDataLoader(data[:-1], batch_size=1, shuffle=True)  # This doesn't work because we need batches to be pairs of graphs
+        # val_loader = GeometricDataLoader(data[-1:], batch_size=1, shuffle=True)
+        train_loader = DataLoader(view_pairs[:-1], batch_size=1, shuffle=True)
+        val_loader = DataLoader(view_pairs[-1:], batch_size=1, shuffle=True)
         all_positive_node_pairs = get_all_positive_node_pairs(graphs_path, point_pairs_path, view_pairs)
         train_loader.all_positive_node_pairs = all_positive_node_pairs
         val_loader.all_positive_node_pairs = all_positive_node_pairs
+        train_loader.graphs_data = data
+        val_loader.graphs_data = data
 
     # Define other components needed for training
-    if old_training:
-        input_size = next(iter(data.values())).x.shape[1]
-    else:
-        input_size = data[0].x.shape[1]
+    # if old_training:
+    #     input_size = next(iter(data.values())).x.shape[1]
+    # else:
+    #     input_size = data[0].x.shape[1]
+    input_size = next(iter(data.values())).x.shape[1]
     model = GCN(input_size, 2)
-    loss_fn = SiameseLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
-    scheduler = lr_scheduler.StepLR(optimizer, 5, gamma=0.1, last_epoch=-1)
+    loss_fn = SiameseLoss() if old_training else SiameseAllPairsLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    scheduler = lr_scheduler.StepLR(optimizer, 100, gamma=0.9, last_epoch=-1)  # a gamma of 1 does nothing
 
-    fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs=100, log_interval=1, start_epoch=0, save_progress_path='./training_results', show_plots=False)
+    fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs=3000, log_interval=5, start_epoch=0, save_progress_path='./training_results', show_plots=False)

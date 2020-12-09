@@ -3,6 +3,7 @@ import numpy as np
 import time
 from datetime import timedelta
 from matplotlib import pyplot as plt
+import torch.nn.functional as F
 
 
 def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs, log_interval, start_epoch=0,
@@ -61,14 +62,45 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
             plt.show()
 
     if save_progress_path is not None:
+        best_epoch = np.argmin(np.array(val_losses))
         plt.plot(train_losses, color='orange', label='train_loss')
         plt.plot(val_losses, color='green', label='val_loss')
-        plt.axvline(np.argmin(np.array(val_losses)), color='red')
+        plt.axvline(best_epoch, color='red')
         plt.title("Loss progression")
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
         plt.legend()
         plt.savefig(save_progress_path + r"\loss_progress.png")
+
+        training_state = torch.load(save_progress_path + rf"\training_state_{best_epoch}.pth")
+        model.load_state_dict(training_state["model"])
+
+        plt.figure()
+        plt.suptitle("Training set node feature vectors")
+        graphs_data = train_loader.graphs_data if hasattr(train_loader, 'graphs_data') else train_loader.dataset.graphs_data
+        for i in range(2):
+            plt.subplot(1, 2, i+1)
+            plt.title(f"{'Normalized' if i == 0 else 'Original'} feature vectors")
+            for view, graph in graphs_data.items():
+                outputs, h = model(graph.x, graph.edge_index)
+                if i == 0:
+                    outputs = F.normalize(outputs, dim=-1)
+                numpy_outputs = outputs.detach().numpy()
+                plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
+            plt.legend()
+        plt.show()
+        # loss, out = test_with_dataloader(model, train_loader, loss_function)
+        # visualize(out, color='b', epoch=epoch, loss=losses[-1], title="Final embeddings")
+        # normalized_out = F.normalize(out, dim=-1)
+        # visualize(normalized_out, color='b', epoch=epoch, loss=losses[-1], title="Normalized final embeddings")
+        #
+        # val_loss, val_out = test_with_dataloader(model, val_loader, loss_function)
+        # normalized_val_out = F.normalize(val_out, dim=-1)
+        # visualize(normalized_val_out, color='b', title="Normalized embeddings of a graph from validation set")
+        #
+        # test_loss, test_out = test_with_dataloader(model, test_loader, loss_function)
+        # normalized_test_out = F.normalize(test_out, dim=-1)
+        # visualize(normalized_test_out, color='b', title="Normalized embeddings of a graph from test set")
 
     print("Best validation loss: {:.4f}".format(np.min(np.array(val_losses))))
 
@@ -82,22 +114,31 @@ def train_epoch(train_loader, model, loss_fn, optimizer, log_interval):
     print("Will sample from train_loader")
     for batch_idx, data in enumerate(train_loader):
         # print("batch_idx", batch_idx, "data", data)
-        view_a, view_b, positive_pairs, negative_pairs, gt = reformat_data(data)
-        graph_a = train_loader.dataset.graphs_data[view_a]
-        graph_b = train_loader.dataset.graphs_data[view_b]
+        old_training = len(data) == 3  # (views, positive pairs, negative pairs) while new training only has 2 views
+        if old_training:
+            view_a, view_b, positive_pairs, negative_pairs, gt = reformat_data(data)
+            graph_a = train_loader.dataset.graphs_data[view_a]
+            graph_b = train_loader.dataset.graphs_data[view_b]
+        else:
+            view_a, view_b, positive_pairs = reformat_data(data, train_loader.all_positive_node_pairs)
+            graph_a = train_loader.graphs_data[view_a]
+            graph_b = train_loader.graphs_data[view_b]
 
         optimizer.zero_grad()
         outputs_a, h_a = model(graph_a.x, graph_a.edge_index)
         outputs_b, h_b = model(graph_b.x, graph_b.edge_index)
 
-        positive_outputs_a = outputs_a[positive_pairs[:, 0]]
-        positive_outputs_b = outputs_b[positive_pairs[:, 1]]
-        negative_outputs_a = outputs_a[negative_pairs[:, 0]]
-        negative_outputs_b = outputs_b[negative_pairs[:, 1]]
-        selected_outputs_a = torch.cat((positive_outputs_a, negative_outputs_a), 0)
-        selected_outputs_b = torch.cat((positive_outputs_b, negative_outputs_b), 0)
+        if old_training:
+            positive_outputs_a = outputs_a[positive_pairs[:, 0]]
+            positive_outputs_b = outputs_b[positive_pairs[:, 1]]
+            negative_outputs_a = outputs_a[negative_pairs[:, 0]]
+            negative_outputs_b = outputs_b[negative_pairs[:, 1]]
+            selected_outputs_a = torch.cat((positive_outputs_a, negative_outputs_a), 0)
+            selected_outputs_b = torch.cat((positive_outputs_b, negative_outputs_b), 0)
+            loss = loss_fn(selected_outputs_a, selected_outputs_b, gt)
+        else:
+            loss = loss_fn(outputs_a, outputs_b, positive_pairs)
 
-        loss = loss_fn(selected_outputs_a, selected_outputs_b, gt)
         losses.append(loss.item())
         total_loss += loss.item()
         loss.backward()
@@ -120,30 +161,44 @@ def test_epoch(val_loader, model, loss_fn):
         model.eval()
         val_loss = 0
         for batch_idx, data in enumerate(val_loader):
-            view_a, view_b, positive_pairs, negative_pairs, gt = reformat_data(data)
-            graph_a = val_loader.dataset.graphs_data[view_a]
-            graph_b = val_loader.dataset.graphs_data[view_b]
+            old_training = len(data) == 3  # (views, positive pairs, negative pairs) while new training only has 2 views
+            if old_training:
+                view_a, view_b, positive_pairs, negative_pairs, gt = reformat_data(data)
+                graph_a = val_loader.dataset.graphs_data[view_a]
+                graph_b = val_loader.dataset.graphs_data[view_b]
+            else:
+                view_a, view_b, positive_pairs = reformat_data(data, val_loader.all_positive_node_pairs)
+                graph_a = val_loader.graphs_data[view_a]
+                graph_b = val_loader.graphs_data[view_b]
 
             outputs_a, h_a = model(graph_a.x, graph_a.edge_index)
             outputs_b, h_b = model(graph_b.x, graph_b.edge_index)
 
-            positive_outputs_a = outputs_a[positive_pairs[:, 0]]
-            positive_outputs_b = outputs_b[positive_pairs[:, 1]]
-            negative_outputs_a = outputs_a[negative_pairs[:, 0]]
-            negative_outputs_b = outputs_b[negative_pairs[:, 1]]
-            selected_outputs_a = torch.cat((positive_outputs_a, negative_outputs_a), 0)
-            selected_outputs_b = torch.cat((positive_outputs_b, negative_outputs_b), 0)
-
-            loss = loss_fn(selected_outputs_a, selected_outputs_b, gt)
+            if old_training:
+                positive_outputs_a = outputs_a[positive_pairs[:, 0]]
+                positive_outputs_b = outputs_b[positive_pairs[:, 1]]
+                negative_outputs_a = outputs_a[negative_pairs[:, 0]]
+                negative_outputs_b = outputs_b[negative_pairs[:, 1]]
+                selected_outputs_a = torch.cat((positive_outputs_a, negative_outputs_a), 0)
+                selected_outputs_b = torch.cat((positive_outputs_b, negative_outputs_b), 0)
+                loss = loss_fn(selected_outputs_a, selected_outputs_b, gt)
+            else:
+                loss = loss_fn(outputs_a, outputs_b, positive_pairs)
             val_loss += loss.item()
 
     return val_loss
 
 
-def reformat_data(data):
-    view_a = data[0][0][0]
-    view_b = data[0][1][0]
-    positive_pairs = torch.squeeze(data[1])
-    negative_pairs = torch.squeeze(data[2])
-    gt = torch.cat((torch.ones(positive_pairs.shape[0]), -torch.ones(negative_pairs.shape[0])), 0)
-    return view_a, view_b, positive_pairs, negative_pairs, gt
+def reformat_data(data, all_positive_pairs=None):
+    if all_positive_pairs is None:
+        view_a = data[0][0][0]
+        view_b = data[0][1][0]
+        positive_pairs = torch.squeeze(data[1])
+        negative_pairs = torch.squeeze(data[2])
+        gt = torch.cat((torch.ones(positive_pairs.shape[0]), -torch.ones(negative_pairs.shape[0])), 0)
+        return view_a, view_b, positive_pairs, negative_pairs, gt
+    else:
+        view_a = data[0][0]
+        view_b = data[1][0]
+        positive_pairs = all_positive_pairs[(view_a, view_b)]
+        return view_a, view_b, positive_pairs
