@@ -171,16 +171,19 @@ class SiameseAllPairsLoss(nn.Module):
         super(SiameseAllPairsLoss, self).__init__()
 
     def forward(self, x1, x2, positive_pairs):
-        # normalized_x1 = F.normalize(x1, dim=-1)
-        # normalized_x2 = F.normalize(x2, dim=-1)
-        # dist = torch.cdist(normalized_x1, normalized_x2)
-        dist = torch.cdist(x1, x2)
+        use_normalized_vectors = False
+        if use_normalized_vectors:
+            normalized_x1 = F.normalize(x1, dim=-1)
+            normalized_x2 = F.normalize(x2, dim=-1)
+            dist = torch.cdist(normalized_x1, normalized_x2)
+        else:
+            dist = torch.cdist(x1, x2)
+        # we create the ground truth matrix that sets a value of 1 for every negative pair and a value inversely proportional to the quantity of positive pairs compared to the total number of pairs
         gt = torch.ones_like(dist)
-        gt[positive_pairs] = -1
+        gt[positive_pairs[:, 0], positive_pairs[:, 1]] = -(dist.shape[0] * dist.shape[1] / positive_pairs.shape[0])
         loss = dist * gt
-        loss = torch.clamp_max(loss, 0.25)
-        # distsq = dist ** 2
-        # summed_dists = torch.sum(distsq, dim=1)
+        if not use_normalized_vectors:
+            loss = torch.clamp_max(loss, 1)
         return -torch.mean(loss)
 
 

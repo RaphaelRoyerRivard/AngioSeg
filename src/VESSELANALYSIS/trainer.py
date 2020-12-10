@@ -74,10 +74,34 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
 
         training_state = torch.load(save_progress_path + rf"\training_state_{best_epoch}.pth")
         model.load_state_dict(training_state["model"])
+        graphs_data = train_loader.graphs_data if hasattr(train_loader, 'graphs_data') else train_loader.dataset.graphs_data
+
+        # Evaluation metric (top-1 and top-5)
+        for view_pair, positive_pairs in train_loader.all_positive_node_pairs.items():
+            graph_a = graphs_data[view_pair[0]]
+            graph_b = graphs_data[view_pair[1]]
+            outputs_a, h = model(graph_a.x, graph_a.edge_index)
+            outputs_b, h = model(graph_b.x, graph_b.edge_index)
+            dist = torch.cdist(outputs_a, outputs_b)
+            topk = torch.topk(-dist, k=5, dim=1)[1]
+            ordered_dists = torch.topk(-dist, k=dist.shape[1], dim=1)[1]
+            top1 = 0
+            top5 = 0
+            total_position = torch.zeros(len(positive_pairs))
+            for i, positive_pair in enumerate(positive_pairs):
+                if positive_pair[1] in topk[positive_pair[0]]:
+                    top5 += 1
+                    if positive_pair[1] == topk[positive_pair[0]][0]:
+                        top1 += 1
+                total_position[i] = torch.nonzero(ordered_dists[positive_pair[0]] == positive_pair[1])[0][0] + 1
+            top1_percent = int(top1 * 10000 / len(positive_pairs)) / 100
+            top5_percent = int(top5 * 10000 / len(positive_pairs)) / 100
+            average_position = int(total_position.mean() * 10) / 10
+            average_position_percent = int((1 - average_position / ordered_dists.shape[1]) * 10000) / 100
+            print(f"{view_pair} results: top-1 = {top1} ({top1_percent}%), top-5 = {top5} ({top5_percent}%), average closest = {average_position}/{ordered_dists.shape[1]} ({average_position_percent}%)")
 
         plt.figure()
         plt.suptitle("Training set node feature vectors")
-        graphs_data = train_loader.graphs_data if hasattr(train_loader, 'graphs_data') else train_loader.dataset.graphs_data
         for i in range(2):
             plt.subplot(1, 2, i+1)
             plt.title(f"{'Normalized' if i == 0 else 'Original'} feature vectors")
@@ -89,27 +113,6 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
                 plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
             plt.legend()
         plt.show()
-
-        # Evaluation metric (top-1 and top-5)
-        if hasattr(train_loader, 'all_positive_node_pairs'):
-            for view_pair, positive_pairs in train_loader.all_positive_node_pairs.items():
-                graph_a = graphs_data[view_pair[0]]
-                graph_b = graphs_data[view_pair[1]]
-                outputs_a, h = model(graph_a.x, graph_a.edge_index)
-                outputs_b, h = model(graph_b.x, graph_b.edge_index)
-                dist = torch.cdist(outputs_a, outputs_b)
-                topk = torch.topk(-dist, k=5, dim=1)[1]
-                top1 = 0
-                top5 = 0
-                for positive_pair in positive_pairs:
-                    if positive_pair[1] in topk[positive_pair[0]]:
-                        top5 += 1
-                        if positive_pair[1] == topk[positive_pair[0]][0]:
-                            top1 += 1
-                top1_percent = int(top1 * 1000 / len(positive_pairs)) / 1000
-                top5_percent = int(top5 * 1000 / len(positive_pairs)) / 1000
-                print(f"{view_pair} results: top-1 = {top1} ({top1_percent}%), top-5 = {top5} ({top5_percent}%)")
-
 
     print("Best validation loss: {:.4f}".format(np.min(np.array(val_losses))))
 

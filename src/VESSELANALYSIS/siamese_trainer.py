@@ -179,11 +179,12 @@ if __name__ == '__main__':
         # val_loader = GeometricDataLoader(data[-1:], batch_size=1, shuffle=True)
         train_loader = DataLoader(view_pairs[:-1], batch_size=1, shuffle=True)
         val_loader = DataLoader(view_pairs[-1:], batch_size=1, shuffle=True)
-        all_positive_node_pairs = get_all_positive_node_pairs(graphs_path, point_pairs_path, view_pairs)
-        train_loader.all_positive_node_pairs = all_positive_node_pairs
-        val_loader.all_positive_node_pairs = all_positive_node_pairs
-        train_loader.graphs_data = data
-        val_loader.graphs_data = data
+
+    all_positive_node_pairs = get_all_positive_node_pairs(graphs_path, point_pairs_path, view_pairs)
+    train_loader.all_positive_node_pairs = all_positive_node_pairs
+    val_loader.all_positive_node_pairs = all_positive_node_pairs
+    train_loader.graphs_data = data
+    val_loader.graphs_data = data
 
     # Define other components needed for training
     # if old_training:
