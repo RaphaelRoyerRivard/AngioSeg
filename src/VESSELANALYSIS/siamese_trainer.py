@@ -196,4 +196,4 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     scheduler = lr_scheduler.StepLR(optimizer, 100, gamma=0.9, last_epoch=-1)  # a gamma of 1 does nothing
 
-    fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs=3000, log_interval=5, start_epoch=0, save_progress_path='./training_results', show_plots=False)
+    fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs=2000, log_interval=5, start_epoch=0, save_progress_path='./training_results', show_plots=False)

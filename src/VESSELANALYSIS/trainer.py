@@ -89,18 +89,27 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
                 plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
             plt.legend()
         plt.show()
-        # loss, out = test_with_dataloader(model, train_loader, loss_function)
-        # visualize(out, color='b', epoch=epoch, loss=losses[-1], title="Final embeddings")
-        # normalized_out = F.normalize(out, dim=-1)
-        # visualize(normalized_out, color='b', epoch=epoch, loss=losses[-1], title="Normalized final embeddings")
-        #
-        # val_loss, val_out = test_with_dataloader(model, val_loader, loss_function)
-        # normalized_val_out = F.normalize(val_out, dim=-1)
-        # visualize(normalized_val_out, color='b', title="Normalized embeddings of a graph from validation set")
-        #
-        # test_loss, test_out = test_with_dataloader(model, test_loader, loss_function)
-        # normalized_test_out = F.normalize(test_out, dim=-1)
-        # visualize(normalized_test_out, color='b', title="Normalized embeddings of a graph from test set")
+
+        # Evaluation metric (top-1 and top-5)
+        if hasattr(train_loader, 'all_positive_node_pairs'):
+            for view_pair, positive_pairs in train_loader.all_positive_node_pairs.items():
+                graph_a = graphs_data[view_pair[0]]
+                graph_b = graphs_data[view_pair[1]]
+                outputs_a, h = model(graph_a.x, graph_a.edge_index)
+                outputs_b, h = model(graph_b.x, graph_b.edge_index)
+                dist = torch.cdist(outputs_a, outputs_b)
+                topk = torch.topk(-dist, k=5, dim=1)[1]
+                top1 = 0
+                top5 = 0
+                for positive_pair in positive_pairs:
+                    if positive_pair[1] in topk[positive_pair[0]]:
+                        top5 += 1
+                        if positive_pair[1] == topk[positive_pair[0]][0]:
+                            top1 += 1
+                top1_percent = int(top1 * 1000 / len(positive_pairs)) / 1000
+                top5_percent = int(top5 * 1000 / len(positive_pairs)) / 1000
+                print(f"{view_pair} results: top-1 = {top1} ({top1_percent}%), top-5 = {top5} ({top5_percent}%)")
+
 
     print("Best validation loss: {:.4f}".format(np.min(np.array(val_losses))))
 
