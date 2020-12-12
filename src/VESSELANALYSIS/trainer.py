@@ -62,7 +62,11 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
             plt.show()
 
     if save_progress_path is not None:
-        best_epoch = np.argmin(np.array(val_losses))
+        load_best_validation = True
+        if load_best_validation:
+            best_epoch = np.argmin(np.array(val_losses))
+        else:
+            best_epoch = len(val_losses) - 1
         plt.plot(train_losses, color='orange', label='train_loss')
         plt.plot(val_losses, color='green', label='val_loss')
         plt.axvline(best_epoch, color='red')
@@ -72,8 +76,9 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
         plt.legend()
         plt.savefig(save_progress_path + r"\loss_progress.png")
 
-        training_state = torch.load(save_progress_path + rf"\training_state_{best_epoch}.pth")
-        model.load_state_dict(training_state["model"])
+        if load_best_validation:
+            training_state = torch.load(save_progress_path + rf"\training_state_{best_epoch}.pth")
+            model.load_state_dict(training_state["model"])
         graphs_data = train_loader.graphs_data if hasattr(train_loader, 'graphs_data') else train_loader.dataset.graphs_data
 
         # Evaluation metric (top-1 and top-5)
@@ -93,12 +98,12 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
                     top5 += 1
                     if positive_pair[1] == topk[positive_pair[0]][0]:
                         top1 += 1
-                total_position[i] = torch.nonzero(ordered_dists[positive_pair[0]] == positive_pair[1])[0][0] + 1
+                total_position[i] = torch.nonzero(ordered_dists[positive_pair[0]] == positive_pair[1], as_tuple=False)[0][0] + 1
             top1_percent = int(top1 * 10000 / len(positive_pairs)) / 100
             top5_percent = int(top5 * 10000 / len(positive_pairs)) / 100
             average_position = int(total_position.mean() * 10) / 10
             average_position_percent = int((1 - average_position / ordered_dists.shape[1]) * 10000) / 100
-            print(f"{view_pair} results: top-1 = {top1} ({top1_percent}%), top-5 = {top5} ({top5_percent}%), average closest = {average_position}/{ordered_dists.shape[1]} ({average_position_percent}%)")
+            print(f"{view_pair} results: top-1 = {top1}/{len(positive_pairs)} ({top1_percent}%), top-5 = {top5}/{len(positive_pairs)} ({top5_percent}%), average closest = {average_position}/{ordered_dists.shape[1]} ({average_position_percent}%)")
 
         plt.figure()
         plt.suptitle("Training set node feature vectors")
@@ -110,7 +115,10 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
                 if i == 0:
                     outputs = F.normalize(outputs, dim=-1)
                 numpy_outputs = outputs.detach().numpy()
-                plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
+                if numpy_outputs.shape[1] >= 2:
+                    plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
+                else:
+                    plt.scatter(numpy_outputs, np.zeros_like(numpy_outputs), label=view)
             plt.legend()
         plt.show()
 

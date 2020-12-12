@@ -183,8 +183,69 @@ class SiameseAllPairsLoss(nn.Module):
         gt[positive_pairs[:, 0], positive_pairs[:, 1]] = -(dist.shape[0] * dist.shape[1] / positive_pairs.shape[0])
         loss = dist * gt
         if not use_normalized_vectors:
-            loss = torch.clamp_max(loss, 1)
+            loss = torch.clamp_max(loss, 2)
         return -torch.mean(loss)
+
+
+class SiameseAbsolutelyAllPairsLoss(nn.Module):
+    def __init__(self):
+        super(SiameseAbsolutelyAllPairsLoss, self).__init__()
+
+    def forward(self, x1, x2, positive_pairs):
+        use_normalized_vectors = False
+        if use_normalized_vectors:
+            normalized_x1 = F.normalize(x1, dim=-1)
+            normalized_x2 = F.normalize(x2, dim=-1)
+            dist_1_2 = torch.cdist(normalized_x1, normalized_x2)
+            dist_1 = torch.cdist(normalized_x1, normalized_x1)
+            dist_2 = torch.cdist(normalized_x2, normalized_x2)
+        else:
+            dist_1_2 = torch.cdist(x1, x2)
+            dist_1 = torch.cdist(x1, x1)
+            dist_2 = torch.cdist(x2, x2)
+        # we create the ground truth matrix that sets a value of 1 for every negative pair and a value inversely proportional to the quantity of positive pairs compared to the total number of pairs
+        gt = torch.ones_like(dist_1_2)
+        gt[positive_pairs[:, 0], positive_pairs[:, 1]] = -(dist_1_2.shape[0] * dist_1_2.shape[1] / positive_pairs.shape[0])
+        loss_1_2 = dist_1_2 * gt
+        loss_1 = dist_1
+        loss_2 = dist_2
+        if not use_normalized_vectors:
+            max_clamp = 2
+            loss_1_2 = torch.clamp_max(loss_1_2, max_clamp)
+            loss_1 = torch.clamp_max(loss_1, max_clamp)
+            loss_2 = torch.clamp_max(loss_2, max_clamp)
+        print(int(1000 * torch.mean(loss_1_2))/1000, int(1000 * torch.mean(loss_1))/1000, int(1000 * torch.mean(loss_2))/1000)
+        total_loss = -torch.mean(loss_1_2) + -torch.mean(loss_1)/2 + -torch.mean(loss_2)/2
+
+        add_feature_vector_norm_regularization = False
+        if add_feature_vector_norm_regularization:
+            norm_1 = torch.norm(x1, dim=-1)
+            norm_2 = torch.norm(x2, dim=-1)
+            total_loss += torch.mean(norm_1) + torch.mean(norm_2)
+
+        add_cosine_similarity_loss = False
+        if add_cosine_similarity_loss:
+            batch_size_1, embedding_size_1 = x1.shape
+            batch_size_2, embedding_size_2 = x2.shape
+
+            normalized_x1 = F.normalize(x1, dim=-1)
+            normalized_x2 = F.normalize(x2, dim=-1)
+
+            # calculate cosine similarity for every combination
+            cosine_similarities_1 = torch.bmm(normalized_x1.view(1, batch_size_1, embedding_size_1),
+                                              normalized_x1.t().view(1, embedding_size_1, batch_size_1))
+            cosine_similarities_2 = torch.bmm(normalized_x2.view(1, batch_size_2, embedding_size_2),
+                                              normalized_x2.t().view(1, embedding_size_2, batch_size_2))
+
+            normalized_cosine_similarities_1 = (cosine_similarities_1 + 1) / 2
+            normalized_cosine_similarities_2 = (cosine_similarities_2 + 1) / 2
+
+            normalized_cosine_similarities_1 = torch.clamp_max(normalized_cosine_similarities_1, 0.01)
+            normalized_cosine_similarities_2 = torch.clamp_max(normalized_cosine_similarities_2, 0.01)
+
+            total_loss += 100 * (torch.mean(normalized_cosine_similarities_1) + torch.mean(normalized_cosine_similarities_2))
+
+        return total_loss
 
 
 def visualize(h, color='r', epoch=None, loss=None, title=""):
