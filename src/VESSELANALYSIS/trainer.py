@@ -102,7 +102,7 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
             top1_percent = int(top1 * 10000 / len(positive_pairs)) / 100
             top5_percent = int(top5 * 10000 / len(positive_pairs)) / 100
             average_position = int(total_position.mean() * 10) / 10
-            average_position_percent = int((1 - average_position / ordered_dists.shape[1]) * 10000) / 100
+            average_position_percent = int((1 - (average_position - 1) / ordered_dists.shape[1]) * 10000) / 100
             print(f"{view_pair} results: top-1 = {top1}/{len(positive_pairs)} ({top1_percent}%), top-5 = {top5}/{len(positive_pairs)} ({top5_percent}%), average closest = {average_position}/{ordered_dists.shape[1]} ({average_position_percent}%)")
 
         plt.figure()
@@ -120,6 +120,19 @@ def fit(train_loader, val_loader, model, loss_fn, optimizer, scheduler, n_epochs
                 else:
                     plt.scatter(numpy_outputs, np.zeros_like(numpy_outputs), label=view)
             plt.legend()
+        plt.show()
+
+        plt.title(f"Generated node feature vectors")
+        plt.xlabel("Value of feature 1")
+        plt.ylabel("Value of feature 2")
+        for view, graph in graphs_data.items():
+            outputs, h = model(graph.x, graph.edge_index)
+            numpy_outputs = outputs.detach().numpy()
+            if numpy_outputs.shape[1] >= 2:
+                plt.scatter(numpy_outputs[:, 0], numpy_outputs[:, 1], label=view)
+            else:
+                plt.scatter(numpy_outputs, np.zeros_like(numpy_outputs), label=view)
+        plt.legend()
         plt.show()
 
     print("Best validation loss: {:.4f}".format(np.min(np.array(val_losses))))
