@@ -1,4 +1,32 @@
-﻿For AngioSeg with tensorflow 1.3: at last an easy installation
+﻿# Outils d'analyse de vasculature
+(par Raphaël Royer-Rivard)
+
+Mon environement python : voir `torch_pip_list.txt`
+
+Mes données : disponibles dans le drive partagé (`\\primnis.gi.polymtl.ca\dfs` dans mon répertoire `Raphael`, peut-être dans `anciens_etudiants`) au nom de `segmentations_vessel_analysis.zip`
+
+### Outil d'extraction de graphe
+
+Plus de documentation disponible vers la fin du fichier `/src/VESSELANALYSIS/vesselanalysis.py`
+
+### Outil d'identification manuelle de l'ostium
+
+Exécuter le fichier `/src/VESSELANALYSIS/ostium_identification_tool.py`
+
+### Outil d'identification manuelle de paires de bifurcations
+
+Exécuter le fichier `/src/PAIRING_TOOL/tool_app.py`
+
+### Outil d'entraînement de réseau de neurones par graphe pour la mise en correspondance spatiale des bifurcations
+
+Exécuter le fichier `/src/VESSELANALYSIS/siamese_trainer.py`
+
+# Outils de segmentation automatique et d'annotation
+(par Fantin Girard)
+
+Mon environement python : voir `tensorflow_pip_list.txt`
+
+For AngioSeg with tensorflow 1.3: at last an easy installation
 - First install CUDA toolkit 8.0
 - Unzip Cudnn v6.0 for cuda 8.0  + add <installpath>\bin to the PATH environment variable.
 - install python 3.5.2 64 bits in the preferred location (please note only one version of python 3 can be in the path) or anaconda 3 64 bits to create specific environment
@@ -23,7 +51,7 @@ checkpointimage = modele avec image 1024x1024 (utilisé notamment dans l'interfa
 checkpointimageback512 = modele avec image background 512x512 (utilisé avec VIDEOTOOL)
 
 
--avant de lancer VIDEOTOOL il faut ouvrir visual studio et compiler les solutions suivantes en Release x64 : src\VESSELANALYSIS\CUDASkel\CUDASkel.sln et src\VESSELANALYSIS\VesselAnalysis\VesselAnalysis.sln
+- avant de lancer VIDEOTOOL il faut ouvrir visual studio et compiler les solutions suivantes en Release x64 : src\VESSELANALYSIS\CUDASkel\CUDASkel.sln et src\VESSELANALYSIS\VesselAnalysis\VesselAnalysis.sln
 
 Pour lancer SEGMENTATIONTOOL --> labelAV.py
 Pour lancer VIDEOTOOL --> camerawidget.py
